@@ -1,0 +1,860 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+use App\Models\BonusConfig;
+use App\Models\Transaction;
+use Illuminate\Support\Facades\DB;
+
+class AuthController extends Controller
+{
+    public function register(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,useremail',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Sva polja su obavezna.', 'errors' => $validator->errors()], 400);
+        }
+
+        $user = User::create([
+            'username' => $request->name,
+            'useremail' => $request->email,
+            'userphone' => '', // Will be set during phone registration
+            'dt' => now(),
+            'rfid' => User::generateUniqueRfid(),
+            'points' => 0,
+            'count' => 0,
+            'dioptrija' => 0,
+            'dsph' => '',
+            'dcyl' => '',
+            'daxa' => '',
+            'lsph' => '',
+            'lcyl' => '',
+            'laxa' => '',
+            'ldadd' => '',
+            'bonus_status' => 0,
+        ]);
+
+        return response()->json(['message' => 'Registracija uspješna!']);
+    }
+
+    public function login(Request $request)
+    {
+        // This method is kept for backward compatibility but phone-based auth is preferred
+        return response()->json(['message' => 'Molimo koristite phone-based prijavu.'], 400);
+    }
+
+    public function phoneLoginOrRegister(Request $request)
+    {
+        $request->validate([
+            'phone_number' => 'required|string',
+        ]);
+        $phone = $request->input('phone_number');
+        
+        // Convert full phone number to local format for database lookup
+        $localPhone = $phone;
+        if (strpos($phone, '+387') === 0) {
+            $localPhone = substr($phone, 4); // Remove +387 prefix
+        }
+        
+        \Log::info('Phone lookup', [
+            'full_phone' => $phone,
+            'local_phone' => $localPhone
+        ]);
+        
+        $user = User::where('userphone', $localPhone)->first();
+        
+        if ($user) {
+            // Phone exists, proceed to OTP
+            return response()->json(['exists' => true]);
+        } else {
+            // Phone doesn't exist, show registration
+            return response()->json(['exists' => false]);
+        }
+    }
+
+    public function sendOtp(Request $request)
+    {
+        \Log::info('Send OTP request received', [
+            'phone_number' => $request->phone_number,
+            'ip' => $request->ip()
+        ]);
+
+        $request->validate([
+            'phone_number' => 'required|string',
+        ]);
+
+        $phoneNumber = $request->phone_number;
+
+        // Server-side rate limiting
+        $phoneKey = 'otp_attempts_' . $phoneNumber;
+        $ipKey = 'otp_ip_attempts_' . $request->ip();
+        $recentKey = 'otp_recent_' . $phoneNumber;
+
+        // Check recent OTP (30 seconds cooldown)
+        if (Cache::has($recentKey)) {
+            \Log::warning('OTP rate limit hit - recent OTP exists', ['phone' => $phoneNumber]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Molimo sačekajte 30 sekundi prije ponovnog slanja OTP-a.'
+            ], 429);
+        }
+
+        // Check phone attempts (max 5 per hour)
+        $phoneAttempts = Cache::get($phoneKey, 0);
+        if ($phoneAttempts >= 20) {
+            \Log::warning('OTP rate limit hit - phone attempts exceeded', ['phone' => $phoneNumber, 'attempts' => $phoneAttempts]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Previše pokušaja. Pokušajte ponovo za 1 sat.'
+            ], 429);
+        }
+
+        // Check IP attempts (max 10 per hour)
+        $ipAttempts = Cache::get($ipKey, 0);
+        if ($ipAttempts >= 15) {
+            \Log::warning('OTP rate limit hit - IP attempts exceeded', ['ip' => $request->ip(), 'attempts' => $ipAttempts]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Previše pokušaja s ove IP adrese. Pokušajte ponovo za 1 sat.'
+            ], 429);
+        }
+
+        // Generate OTP
+        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        
+        \Log::info('OTP generated', ['phone' => $phoneNumber, 'otp' => $otp]);
+
+        // Store OTP in cache (5 minutes)
+        Cache::put('otp_' . $phoneNumber, $otp, 300);
+
+        // Update rate limiting counters
+        Cache::put($phoneKey, $phoneAttempts + 1, 3600);
+        Cache::put($ipKey, $ipAttempts + 1, 3600);
+        Cache::put($recentKey, true, 30);
+
+        // Send SMS
+        $message = "Vaš OTP kod je: {$otp}. Kod je važan 5 minuta.";
+        $smsResult = $this->sendSms($phoneNumber, $message);
+
+        \Log::info('SMS send result', [
+            'phone' => $phoneNumber,
+            'sms_result' => $smsResult
+        ]);
+
+        if ($smsResult['success']) {
+            return response()->json([
+                'success' => true,
+                'message' => 'OTP kod je poslan na vaš broj telefona.'
+            ]);
+        } else {
+            \Log::error('SMS send failed', [
+                'phone' => $phoneNumber,
+                'error' => $smsResult
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Greška pri slanju OTP-a. Pokušajte ponovo.'
+            ], 500);
+        }
+    }
+
+    public function verifyOtp(Request $request)
+    {
+        \Log::info('Verify OTP request received', [
+            'phone_number' => $request->phone_number,
+            'otp' => $request->otp
+        ]);
+
+        $request->validate([
+            'phone_number' => 'required|string',
+            'otp' => 'required|string|size:6',
+        ]);
+
+        $phone = $request->input('phone_number');
+        $otp = $request->input('otp');
+        
+        // Check OTP from cache (use full phone number for cache)
+        $cacheKey = 'otp_' . $phone;
+        $storedOtp = Cache::get($cacheKey);
+        
+        \Log::info('OTP verification details', [
+            'phone' => $phone,
+            'cache_key' => $cacheKey,
+            'stored_otp' => $storedOtp,
+            'submitted_otp' => $otp,
+            'otp_match' => $storedOtp === $otp,
+            'cache_exists' => Cache::has($cacheKey)
+        ]);
+        
+        if (!$storedOtp || $storedOtp !== $otp) {
+            \Log::warning('OTP verification failed', [
+                'phone' => $phone,
+                'stored_otp' => $storedOtp,
+                'submitted_otp' => $otp
+            ]);
+            return response()->json([
+                'message' => 'Pogrešan OTP kod.',
+                'success' => false
+            ], 400);
+        }
+        
+        // Remove OTP from cache after successful verification
+        Cache::forget($cacheKey);
+        
+        \Log::info('OTP verification successful', ['phone' => $phone]);
+        
+        // Convert full phone number to local format for database lookup
+        $localPhone = $phone;
+        if (strpos($phone, '+387') === 0) {
+            $localPhone = substr($phone, 4); // Remove +387 prefix
+        }
+        
+        // Find user by phone number
+        $user = User::where('userphone', $localPhone)->first();
+        
+        if ($user) {
+            // Existing user - login
+            $token = $user->createToken('api-token')->plainTextToken;
+            
+            return response()->json([
+                'message' => 'Uspješna prijava!',
+                'success' => true,
+                'token' => $token,
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->username ?? $user->name ?? 'Korisnik',
+                    'email' => $user->useremail ?? $user->email ?? 'user@example.com',
+                    'phone' => $user->userphone ?? '',
+                    'barcodeId' => (string)$user->rfid, // Use RFID as barcode ID
+                    'points' => (int)($user->points / 10), // Convert points to loyalty points
+                    'dioptrija' => (int)($user->dioptrija ?? 0),
+                    'diopterData' => [
+                        'dsph' => $user->dsph ?? '',
+                        'dcyl' => $user->dcyl ?? '',
+                        'daxa' => $user->daxa ?? '',
+                        'lsph' => $user->lsph ?? '',
+                        'lcyl' => $user->lcyl ?? '',
+                        'laxa' => $user->laxa ?? '',
+                        'ldadd' => $user->ldadd ?? '',
+                    ]
+                ],
+                'isNewUser' => false
+            ]);
+        } else {
+            // New user - return success for registration completion
+            return response()->json([
+                'message' => 'OTP kod je ispravan.',
+                'success' => true,
+                'isNewUser' => true
+            ]);
+        }
+    }
+
+    public function completeRegistration(Request $request)
+    {
+        $request->validate([
+            'phone_number' => 'required|string',
+            'name' => 'required|string|max:255',
+            'surname' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,useremail',
+        ]);
+
+        $phone = $request->input('phone_number');
+        $name = $request->input('name');
+        $surname = $request->input('surname');
+        $email = $request->input('email');
+
+        // Convert full phone number to local format for database storage
+        $localPhone = $phone;
+        if (strpos($phone, '+387') === 0) {
+            $localPhone = substr($phone, 4); // Remove +387 prefix
+        }
+
+        // Create user with existing table structure
+        $user = User::create([
+            'username' => $name . ' ' . $surname,
+            'useremail' => $email,
+            'userphone' => $localPhone,
+            'dt' => now(),
+            'rfid' => User::generateUniqueRfid(), // Unique RFID
+            'points' => 0,
+            'count' => 0,
+            'dioptrija' => 0,
+            'dsph' => '',
+            'dcyl' => '',
+            'daxa' => '',
+            'lsph' => '',
+            'lcyl' => '',
+            'laxa' => '',
+            'ldadd' => '',
+            'bonus_status' => 0,
+        ]);
+
+        $token = $user->createToken('api-token')->plainTextToken;
+        
+        // Give bonus points to new user
+        $bonusResult = $this->giveBonusToUser($user->id);
+        
+        // Refresh user data to get updated points
+        $user->refresh();
+        
+        $response = [
+            'message' => 'Registracija uspješna!',
+            'success' => true,
+            'token' => $token,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->username,
+                'email' => $user->useremail,
+                'phone' => $user->userphone,
+                'barcodeId' => (string)$user->rfid, // Use RFID as barcode ID
+                'points' => (int)($user->points / 10), // Show actual points
+                'dioptrija' => (int)($user->dioptrija ?? 0),
+                'diopterData' => [
+                    'dsph' => $user->dsph ?? '',
+                    'dcyl' => $user->dcyl ?? '',
+                    'daxa' => $user->daxa ?? '',
+                    'lsph' => $user->lsph ?? '',
+                    'lcyl' => $user->lcyl ?? '',
+                    'laxa' => $user->laxa ?? '',
+                    'ldadd' => $user->ldadd ?? '',
+                ]
+            ]
+        ];
+        
+        // Add bonus notification if user received bonus
+        if ($bonusResult && $bonusResult['success']) {
+            $response['bonus'] = [
+                'title' => $bonusResult['title'],
+                'message' => $bonusResult['message'],
+                'points' => $bonusResult['points']
+            ];
+        }
+        
+        return response()->json($response);
+    }
+
+    private function sendSms($phoneNumber, $message)
+    {
+        // Log the SMS attempt
+        \Log::info('SMS sending attempt', [
+            'phone_number' => $phoneNumber,
+            'message' => $message,
+            'sms_base_url' => env('SMS_BASE_URL'),
+            'sms_authorization' => env('SMS_AUTHORIZATION') ? 'Set' : 'Not set'
+        ]);
+
+        // phoneNumber already comes with country code from frontend
+        $curl = curl_init();
+
+        $postData = [
+            'messages' => [
+                [
+                    'sender' => 'OPTIKA.BA',
+                    'destinations' => [
+                        ['to' => $phoneNumber]
+                    ],
+                    'content' => [
+                        'text' => $message
+                    ]
+                ]
+            ]
+        ];
+
+        \Log::info('SMS request data', ['post_data' => $postData]);
+
+        curl_setopt_array($curl, array(
+            CURLOPT_URL => env('SMS_BASE_URL') . '/sms/3/messages',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => '',
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 0,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => json_encode($postData),
+            CURLOPT_HTTPHEADER => array(
+                'Authorization: ' . env('SMS_AUTHORIZATION'),
+                'Content-Type: application/json',
+                'Accept: application/json'
+            ),
+        ));
+
+        $response = curl_exec($curl);
+        $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $error = curl_error($curl);
+        curl_close($curl);
+
+        \Log::info('SMS response', [
+            'http_code' => $httpCode,
+            'response' => $response,
+            'curl_error' => $error
+        ]);
+
+        if ($httpCode === 200) {
+            return ['success' => true, 'response' => $response];
+        } else {
+            return ['success' => false, 'response' => $response, 'httpCode' => $httpCode, 'error' => $error];
+        }
+    }
+
+    public function getUserProfile(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json([
+                'message' => 'Korisnik nije pronađen.',
+                'success' => false
+            ], 404);
+        }
+
+        // Osvežavamo korisnika iz baze da dobijemo najnovije podatke
+        $freshUser = $user->fresh();
+
+        return response()->json([
+            'success' => true,
+            'user' => [
+                'id' => $freshUser->id,
+                'name' => $freshUser->username ?? $freshUser->name ?? 'Korisnik',
+                'email' => $freshUser->useremail ?? $freshUser->email ?? 'user@example.com',
+                'phone' => $freshUser->userphone ?? '',
+                'barcodeId' => (string)$freshUser->rfid, // Use RFID as barcode ID
+                'points' => (int)($freshUser->points / 10), // Convert points to loyalty points
+                'dioptrija' => (int)($freshUser->dioptrija ?? 0),
+                'diopterData' => [
+                    'dsph' => $freshUser->dsph ?? '',
+                    'dcyl' => $freshUser->dcyl ?? '',
+                    'daxa' => $freshUser->daxa ?? '',
+                    'lsph' => $freshUser->lsph ?? '',
+                    'lcyl' => $freshUser->lcyl ?? '',
+                    'laxa' => $freshUser->laxa ?? '',
+                    'ldadd' => $freshUser->ldadd ?? '',
+                ]
+            ]
+        ]);
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|string|max:255',
+            'email' => 'sometimes|string|email|max:255|unique:users,useremail,' . $user->id,
+            'phone' => 'sometimes|string|max:20',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Greška u validaciji podataka.', 'errors' => $validator->errors()], 400);
+        }
+
+        try {
+            $updateData = [];
+            
+            if ($request->has('name')) {
+                $updateData['username'] = $request->name;
+            }
+            
+            if ($request->has('email')) {
+                $updateData['useremail'] = $request->email;
+            }
+            
+            if ($request->has('phone')) {
+                $updateData['userphone'] = $request->phone;
+            }
+
+            $user->update($updateData);
+
+            // Osvežavamo korisnika da dobijemo najnovije podatke
+            $freshUser = $user->fresh();
+
+            return response()->json([
+                'message' => 'Profil uspješno ažuriran.',
+                'user' => [
+                    'id' => $freshUser->id,
+                    'name' => $freshUser->username,
+                    'email' => $freshUser->useremail,
+                    'phone' => $freshUser->userphone,
+                    'barcodeId' => (string)$freshUser->rfid,
+                    'points' => (int)($freshUser->points / 10), // Convert points to loyalty points
+                    'dioptrija' => (int)($freshUser->dioptrija ?? 0),
+                    'diopterData' => [
+                        'dsph' => $freshUser->dsph ?? '',
+                        'dcyl' => $freshUser->dcyl ?? '',
+                        'daxa' => $freshUser->daxa ?? '',
+                        'lsph' => $freshUser->lsph ?? '',
+                        'lcyl' => $freshUser->lcyl ?? '',
+                        'laxa' => $freshUser->laxa ?? '',
+                        'ldadd' => $freshUser->ldadd ?? '',
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Profile update error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom ažuriranja profila.'], 500);
+        }
+    }
+
+    public function updateNotifications(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'pushNotifications' => 'sometimes|boolean',
+            'emailNotifications' => 'sometimes|boolean',
+            'smsNotifications' => 'sometimes|boolean',
+            'appointmentReminders' => 'sometimes|boolean',
+            'loyaltyUpdates' => 'sometimes|boolean',
+            'promotionalOffers' => 'sometimes|boolean',
+            'orderUpdates' => 'sometimes|boolean',
+            'healthReminders' => 'sometimes|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Greška u validaciji podataka.', 'errors' => $validator->errors()], 400);
+        }
+
+        try {
+            $notificationSettings = [
+                'pushNotifications' => $request->input('pushNotifications', true),
+                'emailNotifications' => $request->input('emailNotifications', true),
+                'smsNotifications' => $request->input('smsNotifications', false),
+                'appointmentReminders' => $request->input('appointmentReminders', true),
+                'loyaltyUpdates' => $request->input('loyaltyUpdates', true),
+                'promotionalOffers' => $request->input('promotionalOffers', false),
+                'orderUpdates' => $request->input('orderUpdates', true),
+                'healthReminders' => $request->input('healthReminders', true),
+            ];
+
+            // Save notification settings to database
+            $user->update(['notification_settings' => $notificationSettings]);
+
+            return response()->json([
+                'message' => 'Postavke notifikacija uspješno ažurirane.',
+                'notifications' => $notificationSettings
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Notification settings update error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom ažuriranja postavki notifikacija.'], 500);
+        }
+    }
+
+    public function getNotificationSettings(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        try {
+            // Get notification settings from database or use defaults
+            $notificationSettings = $user->notification_settings ?? [
+                'pushNotifications' => true,
+                'emailNotifications' => true,
+                'smsNotifications' => false,
+                'appointmentReminders' => true,
+                'loyaltyUpdates' => true,
+                'promotionalOffers' => false,
+                'orderUpdates' => true,
+                'healthReminders' => true,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'notifications' => $notificationSettings
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Get notification settings error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom dohvatanja postavki notifikacija.'], 500);
+        }
+    }
+
+    // Funkcija za dohvatanje notifikacija korisnika
+    public function getNotifications(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        try {
+            // Dohvati notifikacije iz baze podataka
+            $notifications = $user->notifications()
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(function ($notification) {
+                    return [
+                        'id' => $notification->id,
+                        'type' => $notification->type,
+                        'title' => $notification->title,
+                        'message' => $notification->message,
+                        'timestamp' => $notification->created_at->toISOString(),
+                        'read' => $notification->read,
+                        'icon' => $notification->icon,
+                        'color' => $notification->color,
+                    ];
+                });
+
+            $unreadCount = $notifications->where('read', false)->count();
+
+            return response()->json([
+                'success' => true,
+                'notifications' => $notifications,
+                'unread_count' => $unreadCount
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Get notifications error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom dohvatanja notifikacija.'], 500);
+        }
+    }
+
+    // Funkcija za označavanje notifikacije kao pročitane
+    public function markNotificationAsRead(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'notification_id' => 'required|integer|exists:notifications,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'ID notifikacije je obavezan i mora biti valjan.'], 400);
+        }
+
+        try {
+            $notification = $user->notifications()->findOrFail($request->notification_id);
+            $notification->markAsRead();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Notifikacija označena kao pročitana.'
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Mark notification as read error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom označavanja notifikacije.'], 500);
+        }
+    }
+
+    // Funkcija za označavanje svih notifikacija kao pročitane
+    public function markAllNotificationsAsRead(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        try {
+            $user->notifications()
+                ->where('read', false)
+                ->update([
+                    'read' => true,
+                    'read_at' => now(),
+                ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Sve notifikacije označene kao pročitane.'
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Mark all notifications as read error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom označavanja notifikacija.'], 500);
+        }
+    }
+
+    public function updatePushToken(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'push_token' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Push token je obavezan.'], 400);
+        }
+
+        try {
+            \Log::info('Updating push token for user: ' . $user->id);
+            \Log::info('Push token: ' . $request->push_token);
+            
+            $user->update(['push_token' => $request->push_token]);
+            
+            \Log::info('Push token updated successfully for user: ' . $user->id);
+
+            return response()->json([
+                'message' => 'Push token uspješno ažuriran.',
+                'success' => true
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Push token update error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom ažuriranja push token-a.'], 500);
+        }
+    }
+
+    // Funkcija za slanje push notifikacija
+    public function sendPushNotification(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'title' => 'required|string|max:255',
+            'body' => 'required|string',
+            'data' => 'sometimes|array',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Greška u validaciji podataka.', 'errors' => $validator->errors()], 400);
+        }
+
+        try {
+            $pushToken = $user->push_token;
+            
+            if (!$pushToken) {
+                return response()->json(['message' => 'Push token nije pronađen.'], 400);
+            }
+
+            // Slanje push notifikacije preko Expo
+            $response = $this->sendExpoPushNotification(
+                $pushToken,
+                $request->title,
+                $request->body,
+                $request->data ?? []
+            );
+
+            return response()->json([
+                'message' => 'Push notifikacija uspješno poslana.',
+                'success' => true,
+                'response' => $response
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Push notification error: ' . $e->getMessage());
+            return response()->json(['message' => 'Došlo je do greške prilikom slanja push notifikacije.'], 500);
+        }
+    }
+
+    private function sendExpoPushNotification($pushToken, $title, $body, $data = [])
+    {
+        $message = [
+            'to' => $pushToken,
+            'sound' => 'default',
+            'title' => $title,
+            'body' => $body,
+            'data' => $data,
+        ];
+
+        $curl = curl_init();
+        curl_setopt_array($curl, [
+            CURLOPT_URL => 'https://exp.host/--/api/v2/push/send',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => '',
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => json_encode($message),
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Accept-encoding: gzip, deflate',
+                'Content-Type: application/json',
+            ],
+        ]);
+
+        $response = curl_exec($curl);
+        $err = curl_error($curl);
+        curl_close($curl);
+
+        if ($err) {
+            throw new \Exception('cURL Error: ' . $err);
+        }
+
+        return json_decode($response, true);
+    }
+
+    private function giveBonusToUser($userId)
+    {
+        try {
+            $config = BonusConfig::getConfig();
+            
+            if (!$config->enabled) {
+                return false;
+            }
+
+            $user = User::find($userId);
+            if (!$user) {
+                return false;
+            }
+
+            // Provjeri da li je korisnik već dobio app bonus
+            if ($user->is_app == 1) {
+                return false; // Već je dobio bonus
+            }
+
+            DB::beginTransaction();
+
+            // Dodaj poene korisniku i označi da je dobio app bonus
+            $user->points += $config->bonus_points;
+            $user->is_app = 1;
+            $user->save();
+
+            // Kreiraj transakciju
+            Transaction::create([
+                'rfid' => $user->rfid,
+                'user' => $user->username,
+                'poslovnica' => 'Online',
+                'points' => $config->bonus_points,
+                'action' => 'dodato',
+                'vrsta' => 'Bonus - Dobrodošlica'
+            ]);
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'points' => $config->bonus_points,
+                'title' => $config->bonus_title,
+                'message' => $config->bonus_message
+            ];
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            \Log::error('Bonus system error: ' . $e->getMessage());
+            return false;
+        }
+    }
+}
