@@ -23,11 +23,29 @@ class ReviewHistoryController extends Controller
         
         // Check if we have service account credentials
         if (file_exists(storage_path('app/google-credentials.json'))) {
-            $client->setAuthConfig(storage_path('app/google-credentials.json'));
-            $client->setScopes([Google_Service_Sheets::SPREADSHEETS_READONLY]);
+            try {
+                $client->setAuthConfig(storage_path('app/google-credentials.json'));
+                $client->setScopes([Google_Service_Sheets::SPREADSHEETS_READONLY]);
+                Log::info('ReviewHistoryController: Using service account credentials');
+            } catch (\Exception $e) {
+                Log::error('ReviewHistoryController: Failed to load service account credentials: ' . $e->getMessage());
+                $apiKey = env('GOOGLE_API_KEY');
+                if ($apiKey) {
+                    $client->setDeveloperKey($apiKey);
+                    Log::info('ReviewHistoryController: Falling back to API key');
+                } else {
+                    Log::warning('ReviewHistoryController: No Google authentication configured');
+                }
+            }
         } else {
             // Fallback to API key if no service account
-            $client->setDeveloperKey(env('GOOGLE_API_KEY'));
+            $apiKey = env('GOOGLE_API_KEY');
+            if ($apiKey) {
+                $client->setDeveloperKey($apiKey);
+                Log::info('ReviewHistoryController: Using API key (service account not found)');
+            } else {
+                Log::warning('ReviewHistoryController: No Google authentication configured - service account file not found and API key not set');
+            }
         }
         
         $this->sheets = new Google_Service_Sheets($client);
@@ -91,7 +109,22 @@ class ReviewHistoryController extends Controller
                 'user_phone' => $user->phone
             ]);
             
-            $response = $this->sheets->spreadsheets_values->get($this->spreadsheetId, $this->range);
+            // Validate auth
+            $client = $this->sheets->getClient();
+            if (!$client->getAccessToken() && !$client->getDeveloperKey()) {
+                throw new \Exception('Google Sheets API authentication not configured.');
+            }
+
+            try {
+                $response = $this->sheets->spreadsheets_values->get($this->spreadsheetId, $this->range);
+            } catch (\Google_Service_Exception $e) {
+                $msg = $e->getMessage();
+                Log::error('ReviewHistoryController: Google Sheets API error', ['code' => $e->getCode(), 'message' => $msg]);
+                if ($e->getCode() == 403 || strpos($msg, '403') !== false) {
+                    throw new \Exception('Permission denied (403). Provjerite da je Google Sheet podijeljen sa service account email-om i da je Google Sheets API omogućen.');
+                }
+                throw new \Exception('Google Sheets API error: ' . $msg);
+            }
             $values = $response->getValues();
 
             if (empty($values)) {

@@ -23,6 +23,7 @@ Route::post('/complete-registration', [AuthController::class, 'completeRegistrat
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user/profile', [AuthController::class, 'getUserProfile']);
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
+    Route::post('/user/bonus/app', [AuthController::class, 'awardAppBonus']);
     Route::get('/user/notifications', [AuthController::class, 'getNotificationSettings']);
     Route::put('/user/notifications', [AuthController::class, 'updateNotifications']);
     Route::get('/user/notifications/list', [AuthController::class, 'getNotifications']);

@@ -29,10 +29,29 @@ class CompaniesController extends Controller
         // Set credentials from service account key file
         $credentialsPath = storage_path('app/google-credentials.json');
         if (file_exists($credentialsPath)) {
-            $this->googleClient->setAuthConfig($credentialsPath);
+            try {
+                $this->googleClient->setAuthConfig($credentialsPath);
+                Log::info('Using service account credentials from: ' . $credentialsPath);
+            } catch (Exception $e) {
+                Log::error('Failed to load service account credentials: ' . $e->getMessage());
+                // Fallback to API key
+                $apiKey = env('GOOGLE_API_KEY');
+                if ($apiKey) {
+                    $this->googleClient->setDeveloperKey($apiKey);
+                    Log::info('Falling back to API key');
+                } else {
+                    Log::error('No authentication method available - neither service account nor API key found');
+                }
+            }
         } else {
             // Fallback to API key if service account is not available
-            $this->googleClient->setDeveloperKey(env('GOOGLE_API_KEY'));
+            $apiKey = env('GOOGLE_API_KEY');
+            if ($apiKey) {
+                $this->googleClient->setDeveloperKey($apiKey);
+                Log::info('Using API key (service account not found)');
+            } else {
+                Log::warning('No Google authentication configured - service account file not found and API key not set');
+            }
         }
     }
 
@@ -72,10 +91,22 @@ class CompaniesController extends Controller
                 'trace' => $e->getTraceAsString()
             ]);
 
+            // Check for specific error types and provide better error messages
+            $errorMessage = $e->getMessage();
+            $isAuthError = false;
+            
+            if (strpos($errorMessage, '403') !== false || 
+                strpos($errorMessage, 'Permission denied') !== false ||
+                strpos($errorMessage, 'unregistered callers') !== false) {
+                $isAuthError = true;
+                $errorMessage = 'Google Sheets authentication failed. Please check service account credentials or API key configuration.';
+            }
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to fetch companies: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Failed to fetch companies: ' . $errorMessage,
+                'error_type' => $isAuthError ? 'authentication' : 'general'
+            ], $isAuthError ? 401 : 500);
         }
     }
 
@@ -88,9 +119,29 @@ class CompaniesController extends Controller
             throw new Exception('Google Sheets Spreadsheet ID not configured');
         }
 
+        // Check if client is properly authenticated
+        if (!$this->googleClient->getAccessToken() && !$this->googleClient->getDeveloperKey()) {
+            throw new Exception('Google Sheets API authentication not configured. Please set up service account credentials or API key.');
+        }
+
         $service = new Google_Service_Sheets($this->googleClient);
         
-        $response = $service->spreadsheets_values->get($this->spreadsheetId, $this->range);
+        try {
+            $response = $service->spreadsheets_values->get($this->spreadsheetId, $this->range);
+        } catch (\Google_Service_Exception $e) {
+            $errorMessage = $e->getMessage();
+            Log::error('Google Sheets API error', [
+                'error' => $errorMessage,
+                'code' => $e->getCode()
+            ]);
+            
+            // Re-throw with more context
+            if ($e->getCode() == 403 || strpos($errorMessage, '403') !== false) {
+                throw new Exception('Permission denied (403). Please ensure: 1) Service account email is shared with the Google Sheet, 2) Google Sheets API is enabled, 3) Credentials are valid.');
+            }
+            
+            throw new Exception('Google Sheets API error: ' . $errorMessage);
+        }
         $values = $response->getValues();
 
         if (empty($values)) {

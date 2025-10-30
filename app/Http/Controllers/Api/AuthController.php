@@ -239,6 +239,7 @@ class AuthController extends Controller
                     'phone' => $user->userphone ?? '',
                     'barcodeId' => (string)$user->rfid, // Use RFID as barcode ID
                     'points' => (int)($user->points / 10), // Convert points to loyalty points
+                    'is_app' => (int)($user->is_app ?? 0),
                     'dioptrija' => (int)($user->dioptrija ?? 0),
                     'diopterData' => [
                         'dsph' => $user->dsph ?? '',
@@ -321,6 +322,7 @@ class AuthController extends Controller
                 'phone' => $user->userphone,
                 'barcodeId' => (string)$user->rfid, // Use RFID as barcode ID
                 'points' => (int)($user->points / 10), // Show actual points
+                'is_app' => (int)($user->is_app ?? 0),
                 'dioptrija' => (int)($user->dioptrija ?? 0),
                 'diopterData' => [
                     'dsph' => $user->dsph ?? '',
@@ -433,6 +435,7 @@ class AuthController extends Controller
                 'phone' => $freshUser->userphone ?? '',
                 'barcodeId' => (string)$freshUser->rfid, // Use RFID as barcode ID
                 'points' => (int)($freshUser->points / 10), // Convert points to loyalty points
+                'is_app' => (int)($freshUser->is_app ?? 0),
                 'dioptrija' => (int)($freshUser->dioptrija ?? 0),
                 'diopterData' => [
                     'dsph' => $freshUser->dsph ?? '',
@@ -445,6 +448,46 @@ class AuthController extends Controller
                 ]
             ]
         ]);
+    }
+
+    public function awardAppBonus(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        if ((int)($user->is_app ?? 0) === 1) {
+            return response()->json([
+                'success' => true,
+                'already_awarded' => true,
+                'user' => [
+                    'id' => $user->id,
+                    'points' => (int)($user->points / 10),
+                    'is_app' => 1,
+                ]
+            ]);
+        }
+
+        $result = $this->giveBonusToUser($user->id);
+        $user->refresh();
+
+        if ($result && $result['success']) {
+            return response()->json([
+                'success' => true,
+                'bonus' => $result,
+                'user' => [
+                    'id' => $user->id,
+                    'points' => (int)($user->points / 10),
+                    'is_app' => (int)($user->is_app ?? 0),
+                ]
+            ]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Bonus nije dodijeljen.'
+        ], 400);
     }
 
     public function updateProfile(Request $request)

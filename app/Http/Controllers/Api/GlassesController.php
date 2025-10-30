@@ -27,10 +27,28 @@ class GlassesController extends Controller
         // Set credentials from service account key file
         $credentialsPath = storage_path('app/google-credentials.json');
         if (file_exists($credentialsPath)) {
-            $this->googleClient->setAuthConfig($credentialsPath);
+            try {
+                $this->googleClient->setAuthConfig($credentialsPath);
+                \Log::info('GlassesController: Using service account credentials');
+            } catch (Exception $e) {
+                \Log::error('GlassesController: Failed to load service account credentials: ' . $e->getMessage());
+                $apiKey = env('GOOGLE_API_KEY');
+                if ($apiKey) {
+                    $this->googleClient->setDeveloperKey($apiKey);
+                    \Log::info('GlassesController: Falling back to API key');
+                } else {
+                    \Log::warning('GlassesController: No Google authentication configured');
+                }
+            }
         } else {
             // Fallback to API key if service account is not available
-            $this->googleClient->setDeveloperKey(env('GOOGLE_API_KEY'));
+            $apiKey = env('GOOGLE_API_KEY');
+            if ($apiKey) {
+                $this->googleClient->setDeveloperKey($apiKey);
+                \Log::info('GlassesController: Using API key (service account not found)');
+            } else {
+                \Log::warning('GlassesController: No Google authentication configured - service account file not found and API key not set');
+            }
         }
     }
 
@@ -186,9 +204,23 @@ class GlassesController extends Controller
             'user_phone' => $user->phone
         ]);
 
+        // Check auth configured
+        if (!$this->googleClient->getAccessToken() && !$this->googleClient->getDeveloperKey()) {
+            throw new Exception('Google Sheets API authentication not configured.');
+        }
+
         $service = new Google_Service_Sheets($this->googleClient);
         
-        $response = $service->spreadsheets_values->get($this->spreadsheetId, $this->range);
+        try {
+            $response = $service->spreadsheets_values->get($this->spreadsheetId, $this->range);
+        } catch (\Google_Service_Exception $e) {
+            $msg = $e->getMessage();
+            \Log::error('GlassesController: Google Sheets API error', ['code' => $e->getCode(), 'message' => $msg]);
+            if ($e->getCode() == 403 || strpos($msg, '403') !== false) {
+                throw new Exception('Permission denied (403). Provjerite da je Google Sheet podijeljen sa service account email-om i da je Google Sheets API omogućen.');
+            }
+            throw new Exception('Google Sheets API error: ' . $msg);
+        }
         $values = $response->getValues();
 
         if (empty($values)) {
