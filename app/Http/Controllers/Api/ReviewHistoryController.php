@@ -13,6 +13,7 @@ class ReviewHistoryController extends Controller
     private $sheets;
     private $spreadsheetId;
     private $range;
+    private $authConfigured = false;
 
     public function __construct()
     {
@@ -27,12 +28,14 @@ class ReviewHistoryController extends Controller
                 $client->setAuthConfig(storage_path('app/google-credentials.json'));
                 $client->setScopes([Google_Service_Sheets::SPREADSHEETS_READONLY]);
                 Log::info('ReviewHistoryController: Using service account credentials');
+                $this->authConfigured = true;
             } catch (\Exception $e) {
                 Log::error('ReviewHistoryController: Failed to load service account credentials: ' . $e->getMessage());
                 $apiKey = env('GOOGLE_API_KEY');
                 if ($apiKey) {
                     $client->setDeveloperKey($apiKey);
                     Log::info('ReviewHistoryController: Falling back to API key');
+                    $this->authConfigured = true;
                 } else {
                     Log::warning('ReviewHistoryController: No Google authentication configured');
                 }
@@ -43,6 +46,7 @@ class ReviewHistoryController extends Controller
             if ($apiKey) {
                 $client->setDeveloperKey($apiKey);
                 Log::info('ReviewHistoryController: Using API key (service account not found)');
+                $this->authConfigured = true;
             } else {
                 Log::warning('ReviewHistoryController: No Google authentication configured - service account file not found and API key not set');
             }
@@ -109,9 +113,8 @@ class ReviewHistoryController extends Controller
                 'user_phone' => $user->phone
             ]);
             
-            // Validate auth
-            $client = $this->sheets->getClient();
-            if (!$client->getAccessToken() && !$client->getDeveloperKey()) {
+            // Validate auth outcome from constructor
+            if (!$this->authConfigured) {
                 throw new \Exception('Google Sheets API authentication not configured.');
             }
 

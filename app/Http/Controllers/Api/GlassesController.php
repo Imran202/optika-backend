@@ -14,6 +14,7 @@ class GlassesController extends Controller
     private $spreadsheetId;
     private $range;
     private $googleClient;
+    private $authConfigured = false;
 
     public function __construct()
     {
@@ -30,12 +31,14 @@ class GlassesController extends Controller
             try {
                 $this->googleClient->setAuthConfig($credentialsPath);
                 \Log::info('GlassesController: Using service account credentials');
+                $this->authConfigured = true;
             } catch (Exception $e) {
                 \Log::error('GlassesController: Failed to load service account credentials: ' . $e->getMessage());
                 $apiKey = env('GOOGLE_API_KEY');
                 if ($apiKey) {
                     $this->googleClient->setDeveloperKey($apiKey);
                     \Log::info('GlassesController: Falling back to API key');
+                    $this->authConfigured = true;
                 } else {
                     \Log::warning('GlassesController: No Google authentication configured');
                 }
@@ -46,6 +49,7 @@ class GlassesController extends Controller
             if ($apiKey) {
                 $this->googleClient->setDeveloperKey($apiKey);
                 \Log::info('GlassesController: Using API key (service account not found)');
+                $this->authConfigured = true;
             } else {
                 \Log::warning('GlassesController: No Google authentication configured - service account file not found and API key not set');
             }
@@ -204,8 +208,8 @@ class GlassesController extends Controller
             'user_phone' => $user->phone
         ]);
 
-        // Check auth configured
-        if (!$this->googleClient->getAccessToken() && !$this->googleClient->getDeveloperKey()) {
+        // Check auth configured (based on constructor outcome)
+        if (!$this->authConfigured) {
             throw new Exception('Google Sheets API authentication not configured.');
         }
 
