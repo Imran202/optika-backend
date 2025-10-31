@@ -15,12 +15,13 @@ class CompaniesController extends Controller
     private $spreadsheetId;
     private $range;
     private $googleClient;
+    private $authConfigured = false;
 
     public function __construct()
     {
-        // Spreadsheet ID iz linka: https://docs.google.com/spreadsheets/d/1VWNFTZ1Mzzo9YW1-XvH5doC_N--Lc92ZInkBBHT8Pb0
-        $this->spreadsheetId = '1VWNFTZ1Mzzo9YW1-XvH5doC_N--Lc92ZInkBBHT8Pb0';
-        $this->range = 'Firme!B:C'; // Kolona B (IME FIRME ZA WEB) i C (Adresa)
+        // Spreadsheet i range se mogu override preko .env
+        $this->spreadsheetId = env('GOOGLE_SHEETS_COMPANIES_ID', '1VWNFTZ1Mzzo9YW1-XvH5doC_N--Lc92ZInkBBHT8Pb0');
+        $this->range = env('GOOGLE_SHEETS_COMPANIES_RANGE', 'Firme!B:C'); // Kolona B (IME FIRME ZA WEB) i C (Adresa)
         
         $this->googleClient = new Google_Client();
         $this->googleClient->setApplicationName('Optika Loyalty App');
@@ -31,26 +32,27 @@ class CompaniesController extends Controller
         if (file_exists($credentialsPath)) {
             try {
                 $this->googleClient->setAuthConfig($credentialsPath);
-                Log::info('Using service account credentials from: ' . $credentialsPath);
+                Log::info('CompaniesController: Using service account credentials');
+                $this->authConfigured = true;
             } catch (Exception $e) {
-                Log::error('Failed to load service account credentials: ' . $e->getMessage());
-                // Fallback to API key
+                Log::error('CompaniesController: Failed to load service account credentials: ' . $e->getMessage());
                 $apiKey = env('GOOGLE_API_KEY');
                 if ($apiKey) {
                     $this->googleClient->setDeveloperKey($apiKey);
-                    Log::info('Falling back to API key');
+                    Log::info('CompaniesController: Falling back to API key');
+                    $this->authConfigured = true;
                 } else {
-                    Log::error('No authentication method available - neither service account nor API key found');
+                    Log::warning('CompaniesController: No authentication method available - neither service account nor API key found');
                 }
             }
         } else {
-            // Fallback to API key if service account is not available
             $apiKey = env('GOOGLE_API_KEY');
             if ($apiKey) {
                 $this->googleClient->setDeveloperKey($apiKey);
-                Log::info('Using API key (service account not found)');
+                Log::info('CompaniesController: Using API key (service account not found)');
+                $this->authConfigured = true;
             } else {
-                Log::warning('No Google authentication configured - service account file not found and API key not set');
+                Log::warning('CompaniesController: No Google authentication configured - service account file not found and API key not set');
             }
         }
     }
@@ -119,8 +121,8 @@ class CompaniesController extends Controller
             throw new Exception('Google Sheets Spreadsheet ID not configured');
         }
 
-        // Check if client is properly authenticated
-        if (!$this->googleClient->getAccessToken() && !$this->googleClient->getDeveloperKey()) {
+        // Check if auth was configured in constructor
+        if (!$this->authConfigured) {
             throw new Exception('Google Sheets API authentication not configured. Please set up service account credentials or API key.');
         }
 
@@ -130,14 +132,14 @@ class CompaniesController extends Controller
             $response = $service->spreadsheets_values->get($this->spreadsheetId, $this->range);
         } catch (\Google_Service_Exception $e) {
             $errorMessage = $e->getMessage();
-            Log::error('Google Sheets API error', [
+            Log::error('CompaniesController: Google Sheets API error', [
                 'error' => $errorMessage,
                 'code' => $e->getCode()
             ]);
             
             // Re-throw with more context
-            if ($e->getCode() == 403 || strpos($errorMessage, '403') !== false) {
-                throw new Exception('Permission denied (403). Please ensure: 1) Service account email is shared with the Google Sheet, 2) Google Sheets API is enabled, 3) Credentials are valid.');
+            if ($e->getCode() == 403 || strpos($errorMessage, '403') !== false || strpos($errorMessage, 'unregistered callers') !== false) {
+                throw new Exception('Permission denied (403). Please ensure: 1) Service account email has access to the Google Sheet, OR make the sheet public when using API key; 2) Google Sheets API is enabled; 3) Credentials are valid.');
             }
             
             throw new Exception('Google Sheets API error: ' . $errorMessage);
