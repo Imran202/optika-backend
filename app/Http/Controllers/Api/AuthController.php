@@ -16,6 +16,94 @@ use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
 {
+    /**
+     * Normalizuje telefonski broj u standardni format
+     * Podržava različite formate: 38762267066, +38762267066, 062267066, 62267066
+     * Vraća standardni format: 062267066 (sa vodećom nulom za BiH brojeve)
+     */
+    private function normalizePhoneNumber($phone)
+    {
+        // Ukloni sve non-digit znakove osim +
+        $phone = preg_replace('/[^\d+]/', '', $phone);
+        
+        // Ukloni +387 ili 387 prefix ako postoji
+        if (strpos($phone, '+387') === 0) {
+            $phone = substr($phone, 4);
+        } elseif (strpos($phone, '387') === 0 && strlen($phone) > 3) {
+            $phone = substr($phone, 3);
+        }
+        
+        // Ukloni vodeće nule (osim ako je broj 9 cifara i počinje sa 0)
+        $phone = ltrim($phone, '0');
+        
+        // Za BiH brojeve (8 ili 9 cifara), dodaj vodeću nulu
+        $length = strlen($phone);
+        if ($length >= 8 && $length <= 9) {
+            // Ako je 8 cifara, dodaj vodeću nulu (npr. 62267066 -> 062267066)
+            if ($length === 8) {
+                $phone = '0' . $phone;
+            }
+            // Ako je 9 cifara, već je u dobrom formatu (ali provjerimo da počinje sa 0)
+            if ($length === 9 && $phone[0] !== '0') {
+                $phone = '0' . $phone;
+            }
+        }
+        
+        return $phone;
+    }
+    
+    /**
+     * Generiše sve moguće varijante telefonskog broja za pretraživanje
+     */
+    private function getPhoneVariants($phone)
+    {
+        $normalized = $this->normalizePhoneNumber($phone);
+        $variants = [$normalized];
+        
+        if (strlen($normalized) === 9 && $normalized[0] === '0') {
+            // Normalizovani format: 062267066
+            $withoutZero = substr($normalized, 1); // 62267066
+            
+            // Dodaj varijante:
+            $variants[] = $withoutZero; // 62267066
+            $variants[] = '387' . $withoutZero; // 38762267066
+            $variants[] = '+387' . $withoutZero; // +38762267066
+        } elseif (strlen($normalized) === 8) {
+            // Normalizovani format: 62267066 (8 cifara)
+            $variants[] = '387' . $normalized; // 38762267066
+            $variants[] = '+387' . $normalized; // +38762267066
+        }
+        
+        return array_unique($variants);
+    }
+    
+    /**
+     * Pronalazi korisnika po telefonskom broju, pokušavajući sve moguće varijante
+     */
+    private function findUserByPhone($phone)
+    {
+        $variants = $this->getPhoneVariants($phone);
+        
+        \Log::info('Searching for user by phone variants', [
+            'original_phone' => $phone,
+            'variants' => $variants
+        ]);
+        
+        // Pokušaj pronaći korisnika sa bilo kojom varijantom
+        foreach ($variants as $variant) {
+            $user = User::where('userphone', $variant)->first();
+            if ($user) {
+                \Log::info('User found with phone variant', [
+                    'variant' => $variant,
+                    'user_id' => $user->id
+                ]);
+                return $user;
+            }
+        }
+        
+        return null;
+    }
+
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -62,18 +150,12 @@ class AuthController extends Controller
         ]);
         $phone = $request->input('phone_number');
         
-        // Convert full phone number to local format for database lookup
-        $localPhone = $phone;
-        if (strpos($phone, '+387') === 0) {
-            $localPhone = substr($phone, 4); // Remove +387 prefix
-        }
-        
         \Log::info('Phone lookup', [
-            'full_phone' => $phone,
-            'local_phone' => $localPhone
+            'full_phone' => $phone
         ]);
         
-        $user = User::where('userphone', $localPhone)->first();
+        // Koristi helper funkciju koja traži sa svim mogućim varijantama
+        $user = $this->findUserByPhone($phone);
         
         if ($user) {
             // Phone exists, proceed to OTP
@@ -215,14 +297,8 @@ class AuthController extends Controller
         
         \Log::info('OTP verification successful', ['phone' => $phone]);
         
-        // Convert full phone number to local format for database lookup
-        $localPhone = $phone;
-        if (strpos($phone, '+387') === 0) {
-            $localPhone = substr($phone, 4); // Remove +387 prefix
-        }
-        
-        // Find user by phone number
-        $user = User::where('userphone', $localPhone)->first();
+        // Koristi helper funkciju koja traži sa svim mogućim varijantama
+        $user = $this->findUserByPhone($phone);
         
         if ($user) {
             // Existing user - login
@@ -277,17 +353,14 @@ class AuthController extends Controller
         $surname = $request->input('surname');
         $email = $request->input('email');
 
-        // Convert full phone number to local format for database storage
-        $localPhone = $phone;
-        if (strpos($phone, '+387') === 0) {
-            $localPhone = substr($phone, 4); // Remove +387 prefix
-        }
+        // Normalizuj telefonski broj prije spremanja u bazu
+        $normalizedPhone = $this->normalizePhoneNumber($phone);
 
         // Create user with existing table structure
         $user = User::create([
             'username' => $name . ' ' . $surname,
             'useremail' => $email,
-            'userphone' => $localPhone,
+            'userphone' => $normalizedPhone,
             'dt' => now(),
             'rfid' => User::generateUniqueRfid(), // Unique RFID
             'points' => 0,
@@ -520,7 +593,8 @@ class AuthController extends Controller
             }
             
             if ($request->has('phone')) {
-                $updateData['userphone'] = $request->phone;
+                // Normalizuj telefonski broj prije spremanja
+                $updateData['userphone'] = $this->normalizePhoneNumber($request->phone);
             }
 
             $user->update($updateData);

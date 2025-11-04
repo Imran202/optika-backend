@@ -41,6 +41,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/reservations/time-slots', [ReservationController::class, 'getAvailableTimeSlots']);
     Route::post('/reservations/create', [ReservationController::class, 'createReservation']);
     Route::get('/reservations/user', [ReservationController::class, 'getUserReservations']);
+    // Backward-compatible alias used by frontend
+    Route::get('/user/appointments', [ReservationController::class, 'getUserReservations']);
     Route::put('/reservations/update', [ReservationController::class, 'updateReservation']);
     Route::delete('/reservations/cancel', [ReservationController::class, 'cancelReservation']);
     
