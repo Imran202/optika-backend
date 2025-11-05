@@ -222,7 +222,7 @@
                 
                 <div class="form-group">
                     <label for="bonus_message">Poruka notifikacije:</label>
-                    <textarea id="bonus_message" name="bonus_message" placeholder="Dobili ste 200 poena kao dobrodošlicu!"></textarea>
+                    <textarea id="bonus_message" name="bonus_message" placeholder="Dobili ste 20 KM kao dobrodošlicu!"></textarea>
                 </div>
                 
                 <button type="submit" class="btn">💾 Sačuvaj konfiguraciju</button>

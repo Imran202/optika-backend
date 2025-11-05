@@ -36,7 +36,7 @@ class OrderController extends Controller
             if ($pointsUsed > 0 && $user) {
                 if ($user->points < $pointsUsed) {
                     return response()->json([
-                        'message' => 'Nemate dovoljno poena. Imate ' . $user->points . ' KM, a pokušavate iskoristiti ' . $pointsUsed . ' KM.',
+                        'message' => 'Nemate dovoljno na računu. Imate ' . $user->points . ' KM, a pokušavate iskoristiti ' . $pointsUsed . ' KM.',
                         'available_points' => $user->points,
                         'requested_points' => $pointsUsed
                     ], 400);

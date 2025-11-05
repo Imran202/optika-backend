@@ -17,7 +17,7 @@ class BonusConfigSeeder extends Seeder
             'enabled' => true,
             'bonus_points' => 200,
             'bonus_title' => 'Dobrodošli!',
-            'bonus_message' => 'Dobili ste 200 poena kao dobrodošlicu!'
+            'bonus_message' => 'Dobili ste 20 KM kao dobrodošlicu!'
         ]);
     }
 }
