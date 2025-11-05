@@ -339,6 +339,21 @@ class AuthController extends Controller
         }
     }
 
+    public function checkEmailAvailability(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|string|email',
+        ]);
+
+        $email = $request->input('email');
+        $exists = User::where('useremail', $email)->exists();
+
+        return response()->json([
+            'available' => !$exists,
+            'message' => $exists ? 'Email je već u upotrebi.' : 'Email je dostupan.'
+        ]);
+    }
+
     public function completeRegistration(Request $request)
     {
         try {
@@ -354,6 +369,17 @@ class AuthController extends Controller
                     'errors' => $validator->errors()->toArray(),
                     'request_data' => $request->all()
                 ]);
+                
+                // Specijalna poruka za već postojeći email
+                $errors = $validator->errors();
+                if ($errors->has('email') && str_contains($errors->first('email'), 'has already been taken')) {
+                    return response()->json([
+                        'message' => 'Email adresa je već registrovana. Molimo koristite drugi email.',
+                        'success' => false,
+                        'error_type' => 'duplicate_email',
+                        'errors' => $errors
+                    ], 422);
+                }
                 
                 return response()->json([
                     'message' => 'Podaci nisu validni.',

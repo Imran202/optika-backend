@@ -17,6 +17,7 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/phone-login-or-register', [AuthController::class, 'phoneLoginOrRegister']);
 Route::post('/send-otp', [AuthController::class, 'sendOtp']);
 Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
+Route::post('/check-email', [AuthController::class, 'checkEmailAvailability']);
 Route::post('/complete-registration', [AuthController::class, 'completeRegistration']);
 
 // Protected routes that require authentication
