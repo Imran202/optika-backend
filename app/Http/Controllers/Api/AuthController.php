@@ -808,9 +808,16 @@ class AuthController extends Controller
 
     public function updatePushToken(Request $request)
     {
+        \Log::info('UpdatePushToken request received', [
+            'has_auth' => Auth::check(),
+            'user_id' => Auth::id(),
+            'request_data' => $request->all()
+        ]);
+        
         $user = Auth::user();
         
         if (!$user) {
+            \Log::warning('UpdatePushToken: User not authenticated');
             return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
         }
 
@@ -819,24 +826,50 @@ class AuthController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['message' => 'Push token je obavezan.'], 400);
+            \Log::warning('UpdatePushToken: Validation failed', [
+                'errors' => $validator->errors()->toArray()
+            ]);
+            return response()->json([
+                'message' => 'Push token je obavezan.',
+                'errors' => $validator->errors()
+            ], 400);
         }
 
         try {
-            \Log::info('Updating push token for user: ' . $user->id);
-            \Log::info('Push token: ' . $request->push_token);
+            \Log::info('Updating push token for user', [
+                'user_id' => $user->id,
+                'username' => $user->username,
+                'current_push_token' => $user->push_token,
+                'new_push_token' => substr($request->push_token, 0, 50) . '...'
+            ]);
             
-            $user->update(['push_token' => $request->push_token]);
+            $result = $user->update(['push_token' => $request->push_token]);
             
-            \Log::info('Push token updated successfully for user: ' . $user->id);
+            // Refresh user to verify update
+            $user->refresh();
+            
+            \Log::info('Push token update result', [
+                'user_id' => $user->id,
+                'update_result' => $result,
+                'stored_push_token' => $user->push_token ? substr($user->push_token, 0, 50) . '...' : 'NULL',
+                'push_token_set' => !empty($user->push_token)
+            ]);
 
             return response()->json([
                 'message' => 'Push token uspješno ažuriran.',
-                'success' => true
+                'success' => true,
+                'push_token_set' => !empty($user->push_token)
             ]);
         } catch (\Exception $e) {
-            \Log::error('Push token update error: ' . $e->getMessage());
-            return response()->json(['message' => 'Došlo je do greške prilikom ažuriranja push token-a.'], 500);
+            \Log::error('Push token update error', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'message' => 'Došlo je do greške prilikom ažuriranja push token-a.',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 
