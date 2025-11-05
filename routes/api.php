@@ -21,7 +21,7 @@ Route::post('/check-email', [AuthController::class, 'checkEmailAvailability']);
 Route::post('/complete-registration', [AuthController::class, 'completeRegistration']);
 
 // Protected routes that require authentication
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', \App\Http\Middleware\LogApiRequests::class])->group(function () {
     Route::get('/user/profile', [AuthController::class, 'getUserProfile']);
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
     Route::post('/user/bonus/app', [AuthController::class, 'awardAppBonus']);
@@ -30,7 +30,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user/notifications/list', [AuthController::class, 'getNotifications']);
     Route::put('/user/notifications/mark-read', [AuthController::class, 'markNotificationAsRead']);
     Route::put('/user/notifications/mark-all-read', [AuthController::class, 'markAllNotificationsAsRead']);
-    Route::put('/user/push-token', [AuthController::class, 'updatePushToken']);
+    Route::put('/user/push-token', [AuthController::class, 'updatePushToken'])
+        ->middleware(\App\Http\Middleware\LogPushTokenRequests::class);
     Route::post('/user/send-notification', [AuthController::class, 'sendPushNotification']);
     Route::get('/transactions/last', [TransactionController::class, 'getLastTransactions']);
     Route::get('/transactions/all', [TransactionController::class, 'getAllTransactions']);

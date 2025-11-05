@@ -356,6 +356,11 @@ class AuthController extends Controller
 
     public function completeRegistration(Request $request)
     {
+        \Log::info('🆕 Complete registration request started', [
+            'timestamp' => now()->toDateTimeString(),
+            'request_data' => $request->all()
+        ]);
+        
         try {
             $validator = Validator::make($request->all(), [
                 'phone_number' => 'required|string',
@@ -418,6 +423,12 @@ class AuthController extends Controller
 
         $token = $user->createToken('api-token')->plainTextToken;
         
+        \Log::info('🔑 Token created for new user', [
+            'user_id' => $user->id,
+            'token_preview' => substr($token, 0, 20) . '...',
+            'token_length' => strlen($token)
+        ]);
+        
         // Give bonus points to new user
         $bonusResult = $this->giveBonusToUser($user->id);
         
@@ -458,9 +469,19 @@ class AuthController extends Controller
             ];
         }
         
-        \Log::info('Complete registration successful', [
+        \Log::info('✅ Complete registration successful', [
             'user_id' => $user->id,
-            'email' => $user->useremail
+            'email' => $user->useremail,
+            'username' => $user->username,
+            'phone' => $user->userphone,
+            'token_issued' => substr($token, 0, 20) . '...'
+        ]);
+        
+        \Log::info('📱 IMPORTANT: Waiting for push token update from mobile app...', [
+            'user_id' => $user->id,
+            'email' => $user->useremail,
+            'next_expected_call' => '/user/push-token',
+            'note' => 'Mobile app should call /user/push-token endpoint with Bearer token within next 5-10 seconds'
         ]);
         
         return response()->json($response);
