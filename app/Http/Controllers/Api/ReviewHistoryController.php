@@ -27,14 +27,12 @@ class ReviewHistoryController extends Controller
             try {
                 $client->setAuthConfig(storage_path('app/google-credentials.json'));
                 $client->setScopes([Google_Service_Sheets::SPREADSHEETS_READONLY]);
-                Log::info('ReviewHistoryController: Using service account credentials');
                 $this->authConfigured = true;
             } catch (\Exception $e) {
                 Log::error('ReviewHistoryController: Failed to load service account credentials: ' . $e->getMessage());
                 $apiKey = env('GOOGLE_API_KEY');
                 if ($apiKey) {
                     $client->setDeveloperKey($apiKey);
-                    Log::info('ReviewHistoryController: Falling back to API key');
                     $this->authConfigured = true;
                 } else {
                     Log::warning('ReviewHistoryController: No Google authentication configured');
@@ -45,7 +43,6 @@ class ReviewHistoryController extends Controller
             $apiKey = env('GOOGLE_API_KEY');
             if ($apiKey) {
                 $client->setDeveloperKey($apiKey);
-                Log::info('ReviewHistoryController: Using API key (service account not found)');
                 $this->authConfigured = true;
             } else {
                 Log::warning('ReviewHistoryController: No Google authentication configured - service account file not found and API key not set');
@@ -61,28 +58,13 @@ class ReviewHistoryController extends Controller
             $user = $request->user();
             
             if (!$user->phone) {
-                Log::info('Review History Request - User phone is null', [
-                    'user_id' => $user->id,
-                    'user_email' => $user->email
-                ]);
                 return response()->json([
                     'success' => false,
                     'message' => 'Korisnik nema unesen broj telefona'
                 ], 400);
             }
 
-            Log::info('Review History Request', [
-                'user_id' => $user->id,
-                'user_phone' => $user->phone,
-                'phone_length' => strlen($user->phone)
-            ]);
-
             $reviews = $this->fetchReviewsFromSheets($user);
-            
-            Log::info('Review History Response', [
-                'user_phone' => $user->phone,
-                'reviews_found' => count($reviews)
-            ]);
 
             return response()->json([
                 'success' => true,
@@ -107,12 +89,6 @@ class ReviewHistoryController extends Controller
     private function fetchReviewsFromSheets($user)
     {
         try {
-            Log::info('Starting to fetch reviews from sheets', [
-                'spreadsheet_id' => $this->spreadsheetId,
-                'range' => $this->range,
-                'user_phone' => $user->phone
-            ]);
-            
             // Validate auth outcome from constructor
             if (!$this->authConfigured) {
                 throw new \Exception('Google Sheets API authentication not configured.');
@@ -131,18 +107,11 @@ class ReviewHistoryController extends Controller
             $values = $response->getValues();
 
             if (empty($values)) {
-                Log::info('No data found in Google Sheets');
                 return [];
             }
 
             $headers = array_map('strtolower', $values[0]);
             $dataRows = array_slice($values, 1);
-
-            Log::info('Google Sheets data fetched', [
-                'headers' => $headers,
-                'rows_count' => count($dataRows),
-                'first_row_sample' => array_slice($dataRows, 0, 1)
-            ]);
 
             $reviews = [];
             $totalRows = count($dataRows);
@@ -151,35 +120,20 @@ class ReviewHistoryController extends Controller
             foreach ($dataRows as $rowIndex => $row) {
                 $reviewData = array_combine($headers, array_pad($row, count($headers), ''));
                 
-                Log::info('Checking row ' . ($rowIndex + 1), [
-                    'sheet_phone' => $reviewData['telefon'] ?? 'N/A',
-                    'user_phone' => $user->phone,
-                    'sheet_name' => $reviewData['ime'] ?? 'N/A'
-                ]);
-                
                 if ($this->matchesUser($reviewData, $user)) {
                     $matchedRows++;
-                    Log::info('✅ Row matched', [
-                        'row' => $rowIndex + 1,
-                        'sheet_phone' => $reviewData['telefon'] ?? 'N/A',
-                        'user_phone' => $user->phone
-                    ]);
                     $formattedReview = $this->formatReviewData($reviewData);
                     $reviews[] = $formattedReview;
-                } else {
-                    Log::info('❌ Row not matched', [
-                        'row' => $rowIndex + 1,
-                        'sheet_phone' => $reviewData['telefon'] ?? 'N/A',
-                        'user_phone' => $user->phone
-                    ]);
                 }
             }
             
-            Log::info('Review matching completed', [
-                'total_rows' => $totalRows,
-                'matched_rows' => $matchedRows,
-                'user_phone' => $user->phone
-            ]);
+            // Log samo ako ima matched reviews ili ako treba debuggirati
+            if ($matchedRows > 0) {
+                Log::info('Review matching completed', [
+                    'matched_rows' => $matchedRows,
+                    'user_phone' => $user->phone
+                ]);
+            }
 
             return $reviews;
 
@@ -203,24 +157,13 @@ class ReviewHistoryController extends Controller
         $sheetPhone = $this->cleanPhoneNumber($originalSheetPhone);
         $userPhone = $this->cleanPhoneNumber($originalUserPhone);
         
-        Log::info('Phone matching attempt', [
-            'original_sheet_phone' => $originalSheetPhone,
-            'cleaned_sheet_phone' => $sheetPhone,
-            'original_user_phone' => $originalUserPhone,
-            'cleaned_user_phone' => $userPhone,
-            'sheet_phone_length' => strlen($sheetPhone),
-            'user_phone_length' => strlen($userPhone)
-        ]);
-        
         // If either phone is empty, no match
         if (empty($sheetPhone) || empty($userPhone)) {
-            Log::info('❌ One or both phone numbers are empty');
             return false;
         }
         
         // Check exact match first
         if ($sheetPhone === $userPhone) {
-            Log::info('✅ Exact phone match');
             return true;
         }
         
@@ -228,11 +171,6 @@ class ReviewHistoryController extends Controller
         if (strlen($userPhone) === 8) {
             $userPhoneWithZero = '0' . $userPhone;
             if ($sheetPhone === $userPhoneWithZero) {
-                Log::info('✅ Phone match with added leading zero', [
-                    'user_phone' => $userPhone,
-                    'user_phone_with_zero' => $userPhoneWithZero,
-                    'sheet_phone' => $sheetPhone
-                ]);
                 return true;
             }
         }
@@ -241,11 +179,6 @@ class ReviewHistoryController extends Controller
         if (strlen($userPhone) === 10 && substr($userPhone, 0, 1) === '0') {
             $userPhoneWithoutZero = substr($userPhone, 1);
             if ($sheetPhone === $userPhoneWithoutZero) {
-                Log::info('✅ Phone match with removed leading zero', [
-                    'user_phone' => $userPhone,
-                    'user_phone_without_zero' => $userPhoneWithoutZero,
-                    'sheet_phone' => $sheetPhone
-                ]);
                 return true;
             }
         }
@@ -254,11 +187,6 @@ class ReviewHistoryController extends Controller
         if (strlen($sheetPhone) === 8) {
             $sheetPhoneWithZero = '0' . $sheetPhone;
             if ($userPhone === $sheetPhoneWithZero) {
-                Log::info('✅ Phone match with added leading zero to sheet', [
-                    'user_phone' => $userPhone,
-                    'sheet_phone' => $sheetPhone,
-                    'sheet_phone_with_zero' => $sheetPhoneWithZero
-                ]);
                 return true;
             }
         }
@@ -267,29 +195,17 @@ class ReviewHistoryController extends Controller
         if (strlen($sheetPhone) === 10 && substr($sheetPhone, 0, 1) === '0') {
             $sheetPhoneWithoutZero = substr($sheetPhone, 1);
             if ($userPhone === $sheetPhoneWithoutZero) {
-                Log::info('✅ Phone match with removed leading zero from sheet', [
-                    'user_phone' => $userPhone,
-                    'sheet_phone' => $sheetPhone,
-                    'sheet_phone_without_zero' => $sheetPhoneWithoutZero
-                ]);
                 return true;
             }
         }
 
-        Log::info('❌ No phone match found');
         return false;
     }
 
     private function cleanPhoneNumber($phone)
     {
-        $originalPhone = $phone;
-        
         // If phone is empty or just dashes, return empty
         if (empty($phone) || $phone === '---' || $phone === 'N/A') {
-            Log::info('Phone number cleaning - empty/dash', [
-                'original' => $originalPhone,
-                'cleaned' => ''
-            ]);
             return '';
         }
         
@@ -303,19 +219,8 @@ class ReviewHistoryController extends Controller
         
         // If phone is too short (less than 8 digits), it's probably invalid
         if (strlen($phone) < 8) {
-            Log::info('Phone number cleaning - too short', [
-                'original' => $originalPhone,
-                'cleaned' => $phone,
-                'length' => strlen($phone)
-            ]);
             return '';
         }
-        
-        Log::info('Phone number cleaning', [
-            'original' => $originalPhone,
-            'cleaned' => $phone,
-            'length' => strlen($phone)
-        ]);
         
         return $phone;
     }

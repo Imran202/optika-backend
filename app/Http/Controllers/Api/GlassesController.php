@@ -30,14 +30,12 @@ class GlassesController extends Controller
         if (file_exists($credentialsPath)) {
             try {
                 $this->googleClient->setAuthConfig($credentialsPath);
-                \Log::info('GlassesController: Using service account credentials');
                 $this->authConfigured = true;
             } catch (Exception $e) {
                 \Log::error('GlassesController: Failed to load service account credentials: ' . $e->getMessage());
                 $apiKey = env('GOOGLE_API_KEY');
                 if ($apiKey) {
                     $this->googleClient->setDeveloperKey($apiKey);
-                    \Log::info('GlassesController: Falling back to API key');
                     $this->authConfigured = true;
                 } else {
                     \Log::warning('GlassesController: No Google authentication configured');
@@ -48,7 +46,6 @@ class GlassesController extends Controller
             $apiKey = env('GOOGLE_API_KEY');
             if ($apiKey) {
                 $this->googleClient->setDeveloperKey($apiKey);
-                \Log::info('GlassesController: Using API key (service account not found)');
                 $this->authConfigured = true;
             } else {
                 \Log::warning('GlassesController: No Google authentication configured - service account file not found and API key not set');
@@ -148,23 +145,8 @@ class GlassesController extends Controller
                 ], 401);
             }
 
-            \Log::info('🔍 User requesting glasses', [
-                'user_id' => $user->id,
-                'user_name' => $user->name,
-                'user_phone' => $user->phone,
-                'user_phone_length' => $user->phone ? strlen($user->phone) : 0,
-                'user_email' => $user->email,
-                'user_object' => json_encode($user)
-            ]);
-
             // Check if user has phone number
             if (!$user->phone) {
-                \Log::warning('⚠️ User has no phone number', [
-                    'user_id' => $user->id,
-                    'user_name' => $user->name,
-                    'user_email' => $user->email
-                ]);
-                
                 return response()->json([
                     'success' => false,
                     'message' => 'Korisnik nema broj telefona. Molimo vas da ažurirate svoj profil.'
@@ -172,11 +154,6 @@ class GlassesController extends Controller
             }
             
             $glassesData = $this->fetchGlassesFromSheets($user);
-            
-            \Log::info('✅ Glasses data found', [
-                'user_phone' => $user->phone,
-                'glasses_count' => count($glassesData)
-            ]);
 
             return response()->json([
                 'success' => true,
@@ -201,12 +178,6 @@ class GlassesController extends Controller
         if (!$this->spreadsheetId) {
             throw new Exception('Google Sheets Spreadsheet ID not configured');
         }
-
-        \Log::info('📊 Fetching data from Google Sheets', [
-            'spreadsheet_id' => $this->spreadsheetId,
-            'range' => $this->range,
-            'user_phone' => $user->phone
-        ]);
 
         // Check auth configured (based on constructor outcome)
         if (!$this->authConfigured) {
@@ -255,27 +226,12 @@ class GlassesController extends Controller
             
             // Match by phone number or name
             if ($this->matchesUser($userPhone, $userName, $sheetPhone, $sheetFullName)) {
-                \Log::info('✅ Found matching user in sheet', [
-                    'protocol' => $rowData['PROTOKOL'] ?? '',
-                    'user_phone' => $userPhone,
-                    'sheet_phone' => $sheetPhone,
-                    'sheet_name' => $sheetFullName,
-                    'frame' => $rowData['OKVIR OPIS'] ?? '',
-                    'date' => $rowData['DATUM'] ?? ''
-                ]);
-                
                 $glasses = $this->formatGlassesData($rowData, $i);
                 if ($glasses) {
                     $userGlasses[] = $glasses;
                 }
             }
         }
-        
-        \Log::info('📊 Search completed', [
-            'user_phone' => $user->phone,
-            'total_rows_searched' => count($values) - 1,
-            'glasses_found' => count($userGlasses)
-        ]);
 
         return $userGlasses;
     }
@@ -291,39 +247,17 @@ class GlassesController extends Controller
         
         // Validate phone number lengths - must be at least 8 digits
         if (strlen($userPhone) < 8 || strlen($sheetPhone) < 8) {
-            \Log::info('⚠️ Phone number too short for comparison', [
-                'user_phone' => $userPhone,
-                'user_phone_length' => strlen($userPhone),
-                'sheet_phone' => $sheetPhone,
-                'sheet_phone_length' => strlen($sheetPhone)
-            ]);
             return false;
         }
         
         // Additional validation: phone numbers must be reasonable length (not too long either)
         if (strlen($userPhone) > 15 || strlen($sheetPhone) > 15) {
-            \Log::info('⚠️ Phone number too long for comparison', [
-                'user_phone' => $userPhone,
-                'user_phone_length' => strlen($userPhone),
-                'sheet_phone' => $sheetPhone,
-                'sheet_phone_length' => strlen($sheetPhone)
-            ]);
             return false;
         }
         
         // Specific validation for Bosnian phone numbers: must be 8-10 digits
-        // 8 digits: 61123456 (without leading 0)
-        // 9 digits: 061123456 (with leading 0)
-        // 10 digits: 0611234567 (with leading 0 and area code)
         if ((strlen($userPhone) < 8 || strlen($userPhone) > 10) || 
             (strlen($sheetPhone) < 8 || strlen($sheetPhone) > 10)) {
-            \Log::info('⚠️ Invalid Bosnian phone number length', [
-                'user_phone' => $userPhone,
-                'user_phone_length' => strlen($userPhone),
-                'sheet_phone' => $sheetPhone,
-                'sheet_phone_length' => strlen($sheetPhone),
-                'note' => 'Bosnian numbers should be 8-10 digits'
-            ]);
             return false;
         }
         
@@ -333,10 +267,6 @@ class GlassesController extends Controller
         
         // Primary match: by phone number (exact match)
         if ($userPhone && $sheetPhone && $userPhone === $sheetPhone) {
-            \Log::info('✅ Exact phone number match', [
-                'user_phone' => $userPhone,
-                'sheet_phone' => $sheetPhone
-            ]);
             return true;
         }
         
@@ -351,11 +281,6 @@ class GlassesController extends Controller
             if (strlen($userPhone) === 8) {
                 $userPhoneWithZero = '0' . $userPhone;
                 if ($userPhoneWithZero === $sheetPhone) {
-                    \Log::info('✅ Phone match with added leading zero', [
-                        'original' => $userPhone,
-                        'with_zero' => $userPhoneWithZero,
-                        'sheet_phone' => $sheetPhone
-                    ]);
                     return true;
                 }
             }
@@ -364,11 +289,6 @@ class GlassesController extends Controller
             if (strlen($sheetPhone) === 8) {
                 $sheetPhoneWithZero = '0' . $sheetPhone;
                 if ($userPhone === $sheetPhoneWithZero) {
-                    \Log::info('✅ Phone match with added leading zero to sheet', [
-                        'user_phone' => $userPhone,
-                        'sheet_original' => $sheetPhone,
-                        'sheet_with_zero' => $sheetPhoneWithZero
-                    ]);
                     return true;
                 }
             }
@@ -377,11 +297,6 @@ class GlassesController extends Controller
             if (strlen($userPhone) === 9 && substr($userPhone, 0, 1) === '0') {
                 $userPhoneWithoutZero = substr($userPhone, 1);
                 if ($userPhoneWithoutZero === $sheetPhone) {
-                    \Log::info('✅ Phone match with removed leading zero', [
-                        'original' => $userPhone,
-                        'without_zero' => $userPhoneWithoutZero,
-                        'sheet_phone' => $sheetPhone
-                    ]);
                     return true;
                 }
             }
@@ -390,11 +305,6 @@ class GlassesController extends Controller
             if (strlen($sheetPhone) === 9 && substr($sheetPhone, 0, 1) === '0') {
                 $sheetPhoneWithoutZero = substr($sheetPhone, 1);
                 if ($userPhone === $sheetPhoneWithoutZero) {
-                    \Log::info('✅ Phone match with removed leading zero from sheet', [
-                        'user_phone' => $userPhone,
-                        'sheet_original' => $sheetPhone,
-                        'sheet_without_zero' => $sheetPhoneWithoutZero
-                    ]);
                     return true;
                 }
             }
@@ -404,24 +314,14 @@ class GlassesController extends Controller
                 $userPhoneClean = preg_replace('/^(\+387|387|0)/', '', $userPhone);
                 $sheetPhoneClean = preg_replace('/^(\+387|387|0)/', '', $sheetPhone);
                 
-                // Only exact match after removing country code
                 if ($userPhoneClean === $sheetPhoneClean) {
-                    \Log::info('✅ Phone match after removing country code', [
-                        'user_phone_clean' => $userPhoneClean,
-                        'sheet_phone_clean' => $sheetPhoneClean
-                    ]);
                     return true;
                 }
             }
             
-            // Check if cleaned sheet phone contains user phone (for cases like "061/050-059" -> "061050059")
+            // Check if cleaned sheet phone contains user phone
             if (strlen($sheetPhone) > strlen($userPhone)) {
                 if (strpos($sheetPhone, $userPhone) !== false) {
-                    \Log::info('✅ Phone match - user phone found within cleaned sheet phone', [
-                        'user_phone' => $userPhone,
-                        'sheet_phone' => $sheetPhone,
-                        'match_type' => 'contains'
-                    ]);
                     return true;
                 }
             }
@@ -429,25 +329,14 @@ class GlassesController extends Controller
             // Check if user phone contains cleaned sheet phone
             if (strlen($userPhone) > strlen($sheetPhone)) {
                 if (strpos($userPhone, $sheetPhone) !== false) {
-                    \Log::info('✅ Phone match - cleaned sheet phone found within user phone', [
-                        'user_phone' => $userPhone,
-                        'sheet_phone' => $sheetPhone,
-                        'match_type' => 'contained_by'
-                    ]);
                     return true;
                 }
             }
             
-            // For complex formats like "061/050-059", clean all characters and check as one number
+            // For complex formats, clean all characters and check as one number
             $cleanedSheetPhone = preg_replace('/[^0-9]/', '', $sheetPhone);
             if (strlen($cleanedSheetPhone) >= 8 && strlen($cleanedSheetPhone) <= 15) {
                 if ($this->comparePhoneNumbers($userPhone, $cleanedSheetPhone)) {
-                    \Log::info('✅ Phone match - complex format cleaned and matched', [
-                        'user_phone' => $userPhone,
-                        'sheet_phone' => $sheetPhone,
-                        'cleaned_sheet_phone' => $cleanedSheetPhone,
-                        'match_type' => 'complex_cleaned'
-                    ]);
                     return true;
                 }
             }
@@ -462,17 +351,7 @@ class GlassesController extends Controller
     private function cleanPhoneNumber($phone): string
     {
         // Remove all non-numeric characters including slashes, dashes, spaces
-        $cleaned = preg_replace('/[^0-9]/', '', $phone);
-        
-        // Log the cleaning process for debugging
-        if ($cleaned !== $phone) {
-            \Log::info('🧹 Phone number cleaned', [
-                'original' => $phone,
-                'cleaned' => $cleaned
-            ]);
-        }
-        
-        return $cleaned;
+        return preg_replace('/[^0-9]/', '', $phone);
     }
 
 
