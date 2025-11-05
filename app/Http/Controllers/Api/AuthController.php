@@ -866,16 +866,28 @@ class AuthController extends Controller
 
     public function updatePushToken(Request $request)
     {
-        \Log::info('UpdatePushToken request received', [
+        \Log::info('🔔 UpdatePushToken request received', [
+            'timestamp' => now()->toDateTimeString(),
+            'ip' => $request->ip(),
+            'user_agent' => $request->userAgent(),
             'has_auth' => Auth::check(),
             'user_id' => Auth::id(),
-            'request_data' => $request->all()
+            'auth_header_present' => $request->hasHeader('Authorization'),
+            'auth_header' => $request->hasHeader('Authorization') ? 'Bearer ***' : 'MISSING',
+            'request_data' => $request->all(),
+            'all_headers' => $request->headers->all()
         ]);
         
         $user = Auth::user();
         
         if (!$user) {
-            \Log::warning('UpdatePushToken: User not authenticated');
+            \Log::warning('❌ UpdatePushToken: User not authenticated', [
+                'auth_check' => Auth::check(),
+                'auth_id' => Auth::id(),
+                'request_ip' => $request->ip(),
+                'has_bearer_token' => $request->bearerToken() !== null,
+                'bearer_token_length' => $request->bearerToken() ? strlen($request->bearerToken()) : 0
+            ]);
             return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
         }
 
@@ -894,11 +906,15 @@ class AuthController extends Controller
         }
 
         try {
-            \Log::info('Updating push token for user', [
+            \Log::info('📝 Updating push token for user', [
                 'user_id' => $user->id,
                 'username' => $user->username,
-                'current_push_token' => $user->push_token,
-                'new_push_token' => substr($request->push_token, 0, 50) . '...'
+                'user_email' => $user->useremail,
+                'user_phone' => $user->userphone,
+                'current_push_token' => $user->push_token ? substr($user->push_token, 0, 50) . '...' : 'NULL',
+                'new_push_token' => substr($request->push_token, 0, 50) . '...',
+                'new_push_token_length' => strlen($request->push_token),
+                'is_expo_token' => str_starts_with($request->push_token, 'ExponentPushToken[')
             ]);
             
             $result = $user->update(['push_token' => $request->push_token]);
@@ -906,11 +922,14 @@ class AuthController extends Controller
             // Refresh user to verify update
             $user->refresh();
             
-            \Log::info('Push token update result', [
+            \Log::info('✅ Push token update result', [
                 'user_id' => $user->id,
-                'update_result' => $result,
+                'username' => $user->username,
+                'update_result' => $result ? 'SUCCESS' : 'FAILED',
                 'stored_push_token' => $user->push_token ? substr($user->push_token, 0, 50) . '...' : 'NULL',
-                'push_token_set' => !empty($user->push_token)
+                'stored_push_token_full_length' => $user->push_token ? strlen($user->push_token) : 0,
+                'push_token_set' => !empty($user->push_token),
+                'tokens_match' => $user->push_token === $request->push_token
             ]);
 
             return response()->json([
