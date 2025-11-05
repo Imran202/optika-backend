@@ -304,6 +304,22 @@ class AuthController extends Controller
             // Existing user - login
             $token = $user->createToken('api-token')->plainTextToken;
             
+            \Log::info('🔑 Token created for existing user login', [
+                'user_id' => $user->id,
+                'username' => $user->username,
+                'email' => $user->useremail,
+                'phone' => $user->userphone,
+                'token_preview' => substr($token, 0, 20) . '...',
+                'token_length' => strlen($token),
+                'current_push_token' => $user->push_token ? substr($user->push_token, 0, 30) . '...' : 'NULL'
+            ]);
+            
+            \Log::info('📱 IMPORTANT: Waiting for push token update from mobile app...', [
+                'user_id' => $user->id,
+                'next_expected_call' => '/user/push-token',
+                'note' => 'Mobile app should call /user/push-token within next 5-10 seconds'
+            ]);
+            
             return response()->json([
                 'message' => 'Uspješna prijava!',
                 'success' => true,
