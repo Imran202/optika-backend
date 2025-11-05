@@ -341,12 +341,26 @@ class AuthController extends Controller
 
     public function completeRegistration(Request $request)
     {
-        $request->validate([
-            'phone_number' => 'required|string',
-            'name' => 'required|string|max:255',
-            'surname' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users,useremail',
-        ]);
+        try {
+            $validator = Validator::make($request->all(), [
+                'phone_number' => 'required|string',
+                'name' => 'required|string|max:255',
+                'surname' => 'required|string|max:255',
+                'email' => 'required|string|email|max:255|unique:users,useremail',
+            ]);
+
+            if ($validator->fails()) {
+                \Log::warning('Complete registration validation failed', [
+                    'errors' => $validator->errors()->toArray(),
+                    'request_data' => $request->all()
+                ]);
+                
+                return response()->json([
+                    'message' => 'Podaci nisu validni.',
+                    'success' => false,
+                    'errors' => $validator->errors()
+                ], 422);
+            }
 
         $phone = $request->input('phone_number');
         $name = $request->input('name');
@@ -418,7 +432,25 @@ class AuthController extends Controller
             ];
         }
         
+        \Log::info('Complete registration successful', [
+            'user_id' => $user->id,
+            'email' => $user->useremail
+        ]);
+        
         return response()->json($response);
+        } catch (\Exception $e) {
+            \Log::error('Complete registration error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request_data' => $request->all()
+            ]);
+            
+            return response()->json([
+                'message' => 'Došlo je do greške prilikom registracije.',
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     private function sendSms($phoneNumber, $message)
