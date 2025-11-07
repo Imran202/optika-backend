@@ -153,76 +153,120 @@ class ReviewHistoryController extends Controller
         $originalSheetPhone = $reviewData['telefon'] ?? '';
         $originalUserPhone = $user->phone;
         
-        // Clean phone numbers (remove spaces, dashes, etc.)
-        $sheetPhone = $this->cleanPhoneNumber($originalSheetPhone);
-        $userPhone = $this->cleanPhoneNumber($originalUserPhone);
+        // Generiši sve moguće varijante za oba broja
+        $userPhoneVariants = $this->getPhoneVariants($originalUserPhone);
+        $sheetPhoneVariants = $this->getPhoneVariants($originalSheetPhone);
         
-        // If either phone is empty, no match
-        if (empty($sheetPhone) || empty($userPhone)) {
-            return false;
-        }
+        \Log::info('📞 Review matching attempt', [
+            'original_user_phone' => $originalUserPhone,
+            'user_phone_variants' => $userPhoneVariants,
+            'original_sheet_phone' => $originalSheetPhone,
+            'sheet_phone_variants' => $sheetPhoneVariants
+        ]);
         
-        // Check exact match first
-        if ($sheetPhone === $userPhone) {
-            return true;
-        }
-        
-        // Special case: if user phone is 8 digits, try adding leading '0'
-        if (strlen($userPhone) === 8) {
-            $userPhoneWithZero = '0' . $userPhone;
-            if ($sheetPhone === $userPhoneWithZero) {
-                return true;
+        // Ako bilo koja varijanta user-a odgovara bilo kojoj varijanti sheet-a, onda se podudaraju
+        if (!empty($userPhoneVariants) && !empty($sheetPhoneVariants)) {
+            foreach ($userPhoneVariants as $userVariant) {
+                foreach ($sheetPhoneVariants as $sheetVariant) {
+                    if ($userVariant === $sheetVariant) {
+                        \Log::info('✅ Review phone match found!', [
+                            'original_user_phone' => $originalUserPhone,
+                            'original_sheet_phone' => $originalSheetPhone,
+                            'matched_variant' => $userVariant
+                        ]);
+                        return true;
+                    }
+                }
             }
         }
         
-        // Special case: if user phone is 10 digits, try removing leading '0'
-        if (strlen($userPhone) === 10 && substr($userPhone, 0, 1) === '0') {
-            $userPhoneWithoutZero = substr($userPhone, 1);
-            if ($sheetPhone === $userPhoneWithoutZero) {
-                return true;
-            }
-        }
-        
-        // Special case: if sheet phone is 8 digits, try adding leading '0'
-        if (strlen($sheetPhone) === 8) {
-            $sheetPhoneWithZero = '0' . $sheetPhone;
-            if ($userPhone === $sheetPhoneWithZero) {
-                return true;
-            }
-        }
-        
-        // Special case: if sheet phone is 10 digits, try removing leading '0'
-        if (strlen($sheetPhone) === 10 && substr($sheetPhone, 0, 1) === '0') {
-            $sheetPhoneWithoutZero = substr($sheetPhone, 1);
-            if ($userPhone === $sheetPhoneWithoutZero) {
-                return true;
-            }
-        }
+        \Log::info('❌ No review match found', [
+            'original_user_phone' => $originalUserPhone,
+            'original_sheet_phone' => $originalSheetPhone
+        ]);
 
         return false;
     }
 
+    /**
+     * Clean phone number - ukloni sve specijalne znakove (razmake, crtice, kose crte, itd.)
+     */
     private function cleanPhoneNumber($phone)
     {
-        // If phone is empty or just dashes, return empty
         if (empty($phone) || $phone === '---' || $phone === 'N/A') {
             return '';
         }
         
-        // Remove all non-digit characters (spaces, dashes, etc.)
-        $phone = preg_replace('/[^0-9]/', '', $phone);
+        // Ukloni sve osim cifara
+        return preg_replace('/[^0-9]/', '', $phone);
+    }
+    
+    /**
+     * Normalizuje telefonski broj u standardni format
+     * Podržava različite formate: 38762267066, +38762267066, 062267066, 62267066, "062 267 066", "062/267-066"
+     * Vraća standardni format: 062267066 (sa vodećom nulom za BiH brojeve)
+     */
+    private function normalizePhoneNumber($phone)
+    {
+        // Prvo očisti broj od svih specijalnih znakova
+        $phone = $this->cleanPhoneNumber($phone);
         
-        // Remove country code if present (387, 387, etc.)
-        if (strlen($phone) > 9 && substr($phone, 0, 3) === '387') {
-            $phone = substr($phone, 3);
-        }
-        
-        // If phone is too short (less than 8 digits), it's probably invalid
-        if (strlen($phone) < 8) {
+        if (empty($phone)) {
             return '';
         }
         
+        // Ukloni +387 ili 387 prefix ako postoji
+        if (strpos($phone, '387') === 0 && strlen($phone) > 3) {
+            $phone = substr($phone, 3);
+        }
+        
+        // Ukloni vodeće nule (osim ako je broj 9 cifara i počinje sa 0)
+        $phone = ltrim($phone, '0');
+        
+        // Za BiH brojeve (8 ili 9 cifara), dodaj vodeću nulu
+        $length = strlen($phone);
+        if ($length >= 8 && $length <= 9) {
+            // Ako je 8 cifara, dodaj vodeću nulu (npr. 62267066 -> 062267066)
+            if ($length === 8) {
+                $phone = '0' . $phone;
+            }
+            // Ako je 9 cifara, već je u dobrom formatu (ali provjerimo da počinje sa 0)
+            if ($length === 9 && $phone[0] !== '0') {
+                $phone = '0' . $phone;
+            }
+        }
+        
         return $phone;
+    }
+    
+    /**
+     * Generiše sve moguće varijante telefonskog broja za podudaranje
+     */
+    private function getPhoneVariants($phone)
+    {
+        $normalized = $this->normalizePhoneNumber($phone);
+        
+        if (empty($normalized)) {
+            return [];
+        }
+        
+        $variants = [$normalized];
+        
+        if (strlen($normalized) === 9 && $normalized[0] === '0') {
+            // Normalizovani format: 062267066
+            $withoutZero = substr($normalized, 1); // 62267066
+            
+            // Dodaj varijante:
+            $variants[] = $withoutZero; // 62267066
+            $variants[] = '387' . $withoutZero; // 38762267066
+            $variants[] = '+387' . $withoutZero; // +38762267066
+        } elseif (strlen($normalized) === 8) {
+            // Normalizovani format: 62267066 (8 cifara)
+            $variants[] = '387' . $normalized; // 38762267066
+            $variants[] = '+387' . $normalized; // +38762267066
+        }
+        
+        return array_unique($variants);
     }
 
     private function formatReviewData($reviewData)

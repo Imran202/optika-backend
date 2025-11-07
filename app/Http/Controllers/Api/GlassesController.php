@@ -241,117 +241,134 @@ class GlassesController extends Controller
      */
     private function matchesUser($userPhone, $userName, $sheetPhone, $sheetFullName): bool
     {
-        // Clean phone numbers for comparison
-        $userPhone = $this->cleanPhoneNumber($userPhone);
-        $sheetPhone = $this->cleanPhoneNumber($sheetPhone);
+        // Generiši sve moguće varijante za oba broja
+        $userPhoneVariants = $this->getPhoneVariants($userPhone);
+        $sheetPhoneVariants = $this->getPhoneVariants($sheetPhone);
         
-        // Validate phone number lengths - must be at least 8 digits
-        if (strlen($userPhone) < 8 || strlen($sheetPhone) < 8) {
-            return false;
+        \Log::info('📞 Glasses matching attempt', [
+            'original_user_phone' => $userPhone,
+            'user_phone_variants' => $userPhoneVariants,
+            'original_sheet_phone' => $sheetPhone,
+            'sheet_phone_variants' => $sheetPhoneVariants
+        ]);
+        
+        // Ako bilo koja varijanta user-a odgovara bilo kojoj varijanti sheet-a, onda se podudaraju
+        if (!empty($userPhoneVariants) && !empty($sheetPhoneVariants)) {
+            foreach ($userPhoneVariants as $userVariant) {
+                foreach ($sheetPhoneVariants as $sheetVariant) {
+                    if ($userVariant === $sheetVariant) {
+                        \Log::info('✅ Glasses phone match found!', [
+                            'original_user_phone' => $userPhone,
+                            'original_sheet_phone' => $sheetPhone,
+                            'matched_variant' => $userVariant
+                        ]);
+                        return true;
+                    }
+                }
+            }
         }
         
-        // Additional validation: phone numbers must be reasonable length (not too long either)
-        if (strlen($userPhone) > 15 || strlen($sheetPhone) > 15) {
-            return false;
-        }
-        
-        // Specific validation for Bosnian phone numbers: must be 8-10 digits
-        if ((strlen($userPhone) < 8 || strlen($userPhone) > 10) || 
-            (strlen($sheetPhone) < 8 || strlen($sheetPhone) > 10)) {
-            return false;
-        }
-        
-        // Clean names for comparison
+        // Sekundarno podudaranje po imenu (ako telefonski brojevi ne odgovaraju)
         $userName = strtolower(trim($userName));
         $sheetFullName = strtolower(trim($sheetFullName));
         
-        // Primary match: by phone number (exact match)
-        if ($userPhone && $sheetPhone && $userPhone === $sheetPhone) {
-            return true;
-        }
-        
-        // Secondary match: by name (if phone number doesn't match)
         if ($userName && $sheetFullName && $userName === $sheetFullName) {
+            \Log::info('✅ Glasses name match found!', [
+                'user_name' => $userName,
+                'sheet_name' => $sheetFullName
+            ]);
             return true;
         }
         
-        // Handle different phone number formats (only for valid Bosnian numbers)
-        if ($userPhone && $sheetPhone) {
-            // Try adding leading zero to user phone if it's 8 digits
-            if (strlen($userPhone) === 8) {
-                $userPhoneWithZero = '0' . $userPhone;
-                if ($userPhoneWithZero === $sheetPhone) {
-                    return true;
-                }
-            }
-            
-            // Try adding leading zero to sheet phone if it's 8 digits
-            if (strlen($sheetPhone) === 8) {
-                $sheetPhoneWithZero = '0' . $sheetPhone;
-                if ($userPhone === $sheetPhoneWithZero) {
-                    return true;
-                }
-            }
-            
-            // Try removing leading zero from user phone if it's 9 digits
-            if (strlen($userPhone) === 9 && substr($userPhone, 0, 1) === '0') {
-                $userPhoneWithoutZero = substr($userPhone, 1);
-                if ($userPhoneWithoutZero === $sheetPhone) {
-                    return true;
-                }
-            }
-            
-            // Try removing leading zero from sheet phone if it's 9 digits
-            if (strlen($sheetPhone) === 9 && substr($sheetPhone, 0, 1) === '0') {
-                $sheetPhoneWithoutZero = substr($sheetPhone, 1);
-                if ($userPhone === $sheetPhoneWithoutZero) {
-                    return true;
-                }
-            }
-            
-            // Remove country code if present and compare (only for 10+ digit numbers)
-            if (strlen($userPhone) >= 10 || strlen($sheetPhone) >= 10) {
-                $userPhoneClean = preg_replace('/^(\+387|387|0)/', '', $userPhone);
-                $sheetPhoneClean = preg_replace('/^(\+387|387|0)/', '', $sheetPhone);
-                
-                if ($userPhoneClean === $sheetPhoneClean) {
-                    return true;
-                }
-            }
-            
-            // Check if cleaned sheet phone contains user phone
-            if (strlen($sheetPhone) > strlen($userPhone)) {
-                if (strpos($sheetPhone, $userPhone) !== false) {
-                    return true;
-                }
-            }
-            
-            // Check if user phone contains cleaned sheet phone
-            if (strlen($userPhone) > strlen($sheetPhone)) {
-                if (strpos($userPhone, $sheetPhone) !== false) {
-                    return true;
-                }
-            }
-            
-            // For complex formats, clean all characters and check as one number
-            $cleanedSheetPhone = preg_replace('/[^0-9]/', '', $sheetPhone);
-            if (strlen($cleanedSheetPhone) >= 8 && strlen($cleanedSheetPhone) <= 15) {
-                if ($this->comparePhoneNumbers($userPhone, $cleanedSheetPhone)) {
-                    return true;
-                }
-            }
-        }
+        \Log::info('❌ No glasses match found', [
+            'original_user_phone' => $userPhone,
+            'original_sheet_phone' => $sheetPhone,
+            'user_name' => $userName,
+            'sheet_name' => $sheetFullName
+        ]);
         
         return false;
     }
 
     /**
-     * Clean phone number for comparison
+     * Clean phone number - ukloni sve specijalne znakove (razmake, crtice, kose crte, itd.)
      */
     private function cleanPhoneNumber($phone): string
     {
-        // Remove all non-numeric characters including slashes, dashes, spaces
+        if (empty($phone)) {
+            return '';
+        }
+        
+        // Ukloni sve osim cifara
         return preg_replace('/[^0-9]/', '', $phone);
+    }
+    
+    /**
+     * Normalizuje telefonski broj u standardni format
+     * Podržava različite formate: 38762267066, +38762267066, 062267066, 62267066, "062 267 066", "062/267-066"
+     * Vraća standardni format: 062267066 (sa vodećom nulom za BiH brojeve)
+     */
+    private function normalizePhoneNumber($phone)
+    {
+        // Prvo očisti broj od svih specijalnih znakova
+        $phone = $this->cleanPhoneNumber($phone);
+        
+        if (empty($phone)) {
+            return '';
+        }
+        
+        // Ukloni +387 ili 387 prefix ako postoji
+        if (strpos($phone, '387') === 0 && strlen($phone) > 3) {
+            $phone = substr($phone, 3);
+        }
+        
+        // Ukloni vodeće nule (osim ako je broj 9 cifara i počinje sa 0)
+        $phone = ltrim($phone, '0');
+        
+        // Za BiH brojeve (8 ili 9 cifara), dodaj vodeću nulu
+        $length = strlen($phone);
+        if ($length >= 8 && $length <= 9) {
+            // Ako je 8 cifara, dodaj vodeću nulu (npr. 62267066 -> 062267066)
+            if ($length === 8) {
+                $phone = '0' . $phone;
+            }
+            // Ako je 9 cifara, već je u dobrom formatu (ali provjerimo da počinje sa 0)
+            if ($length === 9 && $phone[0] !== '0') {
+                $phone = '0' . $phone;
+            }
+        }
+        
+        return $phone;
+    }
+    
+    /**
+     * Generiše sve moguće varijante telefonskog broja za podudaranje
+     */
+    private function getPhoneVariants($phone)
+    {
+        $normalized = $this->normalizePhoneNumber($phone);
+        
+        if (empty($normalized)) {
+            return [];
+        }
+        
+        $variants = [$normalized];
+        
+        if (strlen($normalized) === 9 && $normalized[0] === '0') {
+            // Normalizovani format: 062267066
+            $withoutZero = substr($normalized, 1); // 62267066
+            
+            // Dodaj varijante:
+            $variants[] = $withoutZero; // 62267066
+            $variants[] = '387' . $withoutZero; // 38762267066
+            $variants[] = '+387' . $withoutZero; // +38762267066
+        } elseif (strlen($normalized) === 8) {
+            // Normalizovani format: 62267066 (8 cifara)
+            $variants[] = '387' . $normalized; // 38762267066
+            $variants[] = '+387' . $normalized; // +38762267066
+        }
+        
+        return array_unique($variants);
     }
 
 
