@@ -827,6 +827,10 @@ class AuthController extends Controller
                         'read' => $notification->read,
                         'icon' => $notification->icon,
                         'color' => $notification->color,
+                        'has_post' => $notification->has_post ?? false,
+                        'post_title' => $notification->post_title,
+                        'post_description' => $notification->post_description,
+                        'post_image' => $notification->post_image,
                     ];
                 });
 
