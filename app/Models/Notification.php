@@ -16,11 +16,16 @@ class Notification extends Model
         'icon',
         'color',
         'read_at',
+        'has_post',
+        'post_title',
+        'post_description',
+        'post_image',
     ];
 
     protected $casts = [
         'read' => 'boolean',
         'read_at' => 'datetime',
+        'has_post' => 'boolean',
     ];
 
     public function user(): BelongsTo
