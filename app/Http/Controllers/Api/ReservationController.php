@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
 class ReservationController extends Controller
@@ -168,6 +169,40 @@ class ReservationController extends Controller
                 'telefon' => $request->telefon,
                 'email' => $request->email
             ]);
+
+            // Format time from H:i:s to H:i for Pipedream
+            $vrijemeFormatted = Carbon::createFromFormat('H:i:s', $request->vrijeme)->format('H:i');
+            
+            // Format date to Y-m-d format
+            $datumFormatted = Carbon::parse($request->datum)->format('Y-m-d');
+
+            // Send reservation data to Pipedream webhook
+            try {
+                $pipedreamData = [
+                    'id_rezervacije' => $nextId,
+                    'poslovnica' => $request->poslovnica,
+                    'datum' => $datumFormatted,
+                    'vrijeme' => $vrijemeFormatted,
+                    'ime' => $request->ime,
+                    'prezime' => $request->prezime,
+                    'telefon' => $request->telefon,
+                    'email' => $request->email
+                ];
+
+                $response = Http::timeout(10)->post('https://eo5deg3erplz8mo.m.pipedream.net/', $pipedreamData);
+                
+                // Log the response for debugging (optional)
+                \Log::info('Pipedream webhook response', [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+            } catch (\Exception $e) {
+                // Log error but don't fail the reservation creation
+                \Log::error('Failed to send reservation to Pipedream', [
+                    'error' => $e->getMessage(),
+                    'reservation_id' => $nextId
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
