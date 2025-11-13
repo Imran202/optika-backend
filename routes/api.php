@@ -24,6 +24,7 @@ Route::post('/complete-registration', [AuthController::class, 'completeRegistrat
 Route::middleware(['auth:sanctum', \App\Http\Middleware\LogApiRequests::class])->group(function () {
     Route::get('/user/profile', [AuthController::class, 'getUserProfile']);
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
+    Route::put('/user/diopter', [AuthController::class, 'updateDiopter']);
     Route::post('/user/bonus/app', [AuthController::class, 'awardAppBonus']);
     Route::get('/user/notifications', [AuthController::class, 'getNotificationSettings']);
     Route::put('/user/notifications', [AuthController::class, 'updateNotifications']);

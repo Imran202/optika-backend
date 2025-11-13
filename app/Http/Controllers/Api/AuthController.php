@@ -724,6 +724,77 @@ class AuthController extends Controller
         }
     }
 
+    public function updateDiopter(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Korisnik nije pronađen.'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'dsph' => 'required|string|max:10',
+            'dcyl' => 'required|string|max:10',
+            'daxa' => 'required|string|max:10',
+            'lsph' => 'required|string|max:10',
+            'lcyl' => 'required|string|max:10',
+            'laxa' => 'required|string|max:10',
+            'ldadd' => 'nullable|string|max:10',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Greška u validaciji podataka.',
+                'errors' => $validator->errors()
+            ], 400);
+        }
+
+        try {
+            $user->update([
+                'dioptrija' => 1, // Mark that user has diopter data
+                'dsph' => $request->dsph,
+                'dcyl' => $request->dcyl,
+                'daxa' => $request->daxa,
+                'lsph' => $request->lsph,
+                'lcyl' => $request->lcyl,
+                'laxa' => $request->laxa,
+                'ldadd' => $request->ldadd ?? '',
+            ]);
+
+            // Refresh user data
+            $freshUser = $user->fresh();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Dioptrija uspješno ažurirana.',
+                'user' => [
+                    'id' => $freshUser->id,
+                    'name' => $freshUser->username,
+                    'email' => $freshUser->useremail,
+                    'phone' => $freshUser->userphone,
+                    'barcodeId' => (string)$freshUser->rfid,
+                    'points' => (int)($freshUser->points / 10),
+                    'dioptrija' => (int)($freshUser->dioptrija ?? 0),
+                    'diopterData' => [
+                        'dsph' => $freshUser->dsph ?? '',
+                        'dcyl' => $freshUser->dcyl ?? '',
+                        'daxa' => $freshUser->daxa ?? '',
+                        'lsph' => $freshUser->lsph ?? '',
+                        'lcyl' => $freshUser->lcyl ?? '',
+                        'laxa' => $freshUser->laxa ?? '',
+                        'ldadd' => $freshUser->ldadd ?? '',
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Diopter update error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Došlo je do greške prilikom ažuriranja dioptrije.'
+            ], 500);
+        }
+    }
+
     public function updateNotifications(Request $request)
     {
         $user = Auth::user();
