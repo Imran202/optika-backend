@@ -170,22 +170,36 @@ class OrderController extends Controller
         try {
             $customerInfo = $orderData['customerInfo'];
             
-            // Pripremi line items za WooCommerce
+            // Pripremi line items za WooCommerce sa finalnom cijenom
             $lineItems = [];
+            $pointsUsed = floatval($orderData['pointsUsed'] ?? 0);
+            $finalPriceAfterPoints = floatval($orderData['finalPriceAfterPoints'] ?? 0);
             
             if (isset($orderData['products'])) {
                 // Multiple products from cart
+                // Izračunaj proporciju za svaki proizvod
+                $totalWithDiscount = floatval($orderData['totalPrice'] ?? 0);
                 foreach ($orderData['products'] as $product) {
+                    $productTotal = floatval($product['pricePerItem']) * (int)$product['quantity'];
+                    $productProportion = $totalWithDiscount > 0 ? ($productTotal / $totalWithDiscount) : 0;
+                    $productFinalPrice = $productProportion * $finalPriceAfterPoints;
+                    
                     $lineItems[] = [
                         'product_id' => (int)$product['productId'],
-                        'quantity' => (int)$product['quantity']
+                        'quantity' => (int)$product['quantity'],
+                        'subtotal' => number_format($productFinalPrice, 2, '.', ''),
+                        'total' => number_format($productFinalPrice, 2, '.', '')
                     ];
                 }
             } else {
                 // Single product
+                $quantity = (int)($orderData['quantity'] ?? 1);
+                
                 $lineItems[] = [
                     'product_id' => (int)$orderData['productId'],
-                    'quantity' => (int)$orderData['quantity']
+                    'quantity' => $quantity,
+                    'subtotal' => number_format($finalPriceAfterPoints, 2, '.', ''),
+                    'total' => number_format($finalPriceAfterPoints, 2, '.', '')
                 ];
             }
             
@@ -200,7 +214,7 @@ class OrderController extends Controller
                     'address_1' => $customerInfo['address'],
                     'city' => $customerInfo['city'],
                     'state' => 'FBiH',
-                    'postcode' => $customerInfo['zipcode'],
+                    'postcode' => '-',
                     'country' => 'BA',
                     'email' => $customerInfo['email'],
                     'phone' => $customerInfo['phone']
@@ -211,7 +225,7 @@ class OrderController extends Controller
                     'address_1' => $customerInfo['address'],
                     'city' => $customerInfo['city'],
                     'state' => 'FBiH',
-                    'postcode' => $customerInfo['zipcode'],
+                    'postcode' => '-',
                     'country' => 'BA'
                 ],
                 'line_items' => $lineItems,
@@ -289,18 +303,56 @@ class OrderController extends Controller
             $note .= "───────────────────────────────────────\n\n";
         }
         
-        // Loyalty Info
-        $loyaltyDiscount = config('discount.loyalty_discount_percentage', 10);
-        $note .= "💎 LOYALTY PROGRAM INFO:\n";
-        $note .= "   • Akcija: {$loyaltyDiscount}% popusta za loyalty članove\n";
-        $note .= "   • Stanje prije kupovine: " . number_format($orderData['loyaltyPoints'] ?? 0, 2) . " KM\n";
+        // Detalji proizvoda i cijena
+        $note .= "📦 DETALJI NARUDŽBE:\n";
+        
+        if (isset($orderData['products'])) {
+            // Multiple products
+            foreach ($orderData['products'] as $product) {
+                $originalPrice = floatval($product['originalPrice'] ?? 0);
+                $discountAmount = floatval($product['discountAmount'] ?? 0);
+                $discountPercentage = floatval($product['discountPercentage'] ?? 0);
+                $quantity = (int)($product['quantity'] ?? 1);
+                $totalOriginal = $originalPrice * $quantity;
+                
+                $note .= "\n   Proizvod: " . ($product['productName'] ?? '') . "\n";
+                $note .= "   Količina: {$quantity}\n";
+                $note .= "   Originalna cijena: " . number_format($totalOriginal, 2) . " KM\n";
+                $note .= "   Popust ({$discountPercentage}%): -" . number_format($discountAmount, 2) . " KM\n";
+            }
+        } else {
+            // Single product
+            $originalPrice = floatval($orderData['originalPrice'] ?? 0);
+            $discountAmount = floatval($orderData['discountAmount'] ?? 0);
+            $discountPercentage = floatval($orderData['discountPercentage'] ?? 0);
+            $quantity = (int)($orderData['quantity'] ?? 1);
+            $totalOriginal = $originalPrice * $quantity;
+            
+            $note .= "\n   Proizvod: " . ($orderData['productName'] ?? '') . "\n";
+            $note .= "   Količina: {$quantity}\n";
+            $note .= "   Originalna cijena: " . number_format($totalOriginal, 2) . " KM\n";
+            $note .= "   Popust ({$discountPercentage}%): -" . number_format($discountAmount, 2) . " KM\n";
+        }
         
         // Points korišteni za plaćanje
         $pointsUsed = floatval($orderData['pointsUsed'] ?? 0);
+        $totalWithDiscount = floatval($orderData['totalPrice'] ?? 0);
+        $finalPriceAfterPoints = floatval($orderData['finalPriceAfterPoints'] ?? 0);
+        
+        $note .= "\n   Cijena sa popustom: " . number_format($totalWithDiscount, 2) . " KM\n";
+        
         if ($pointsUsed > 0) {
-            $note .= "\n💰 PLAĆENO SA RAČUNA:\n";
-            $note .= "   • Iskorišteno: " . number_format($pointsUsed, 2) . " KM\n";
+            $note .= "   Iskorišteno sa računa: -" . number_format($pointsUsed, 2) . " KM\n";
         }
+        
+        $note .= "   ───────────────────────────────\n";
+        $note .= "   FINALNA CIJENA ZA PLAĆANJE: " . number_format($finalPriceAfterPoints, 2) . " KM\n";
+        
+        // Loyalty Info
+        $loyaltyDiscount = config('discount.loyalty_discount_percentage', 10);
+        $note .= "\n💎 LOYALTY PROGRAM INFO:\n";
+        $note .= "   • Akcija: {$loyaltyDiscount}% popusta za loyalty članove\n";
+        $note .= "   • Stanje prije kupovine: " . number_format($orderData['loyaltyPoints'] ?? 0, 2) . " KM\n";
         
         // Cashback info
         $cashbackPercentage = config('discount.cashback_percentage', 5);

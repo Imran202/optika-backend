@@ -34,8 +34,6 @@
 
 **Grad:** {{ $orderData['customerInfo']['city'] ?? '' }}
 
-**Poštanski broj:** {{ $orderData['customerInfo']['zipcode'] ?? '' }}
-
 @if(!empty($orderData['customerInfo']['note']))
 **Dodatne napomene:** {{ $orderData['customerInfo']['note'] }}
 @endif
