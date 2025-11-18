@@ -1166,7 +1166,6 @@ class AuthController extends Controller
 
             DB::beginTransaction();
 
-            // Dodaj poene korisniku i označi da je dobio app bonus
             $user->points += $config->bonus_points;
             $user->is_app = 1;
             $user->save();

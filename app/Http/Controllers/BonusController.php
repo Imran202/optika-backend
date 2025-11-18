@@ -74,7 +74,6 @@ class BonusController extends Controller
 
             DB::beginTransaction();
 
-            // Dodaj poene korisniku
             $user->points += $config->bonus_points;
             $user->save();
 

@@ -188,7 +188,7 @@
     <div class="container">
         <div class="header">
             <h1>🎁 Bonus Sistem</h1>
-            <p>Upravljanje bonus poenima za nove korisnike</p>
+            <p>Upravljanje bonus KM za nove korisnike</p>
         </div>
         
         <div class="content">
@@ -196,7 +196,7 @@
             
             <div class="info-box">
                 <h3>ℹ️ Kako funkcioniše bonus sistem?</h3>
-                <p>Kada se korisnik prvi put registruje u aplikaciju, automatski dobija bonus poene. Možete podesiti iznos bonus poena, naslov i poruku notifikacije.</p>
+                <p>Kada se korisnik prvi put registruje u aplikaciju, automatski dobija bonus KM. Možete podesiti iznos bonus KM, naslov i poruku notifikacije.</p>
             </div>
             
             <form id="bonusForm">
@@ -211,7 +211,7 @@
                 </div>
                 
                 <div class="form-group">
-                    <label for="bonus_points">Bonus poeni:</label>
+                    <label for="bonus_points">Bonus KM:</label>
                     <input type="number" id="bonus_points" name="bonus_points" min="0" placeholder="200">
                 </div>
                 
