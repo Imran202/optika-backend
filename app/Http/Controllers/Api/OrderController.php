@@ -33,26 +33,30 @@ class OrderController extends Controller
             $orderTotal = floatval($orderData['orderTotal'] ?? 0);
             
             // Validacija: proveri da li korisnik ima dovoljno points-a
+            // Points se u bazi čuvaju kao points * 10
             if ($pointsUsed > 0 && $user) {
-                if ($user->points < $pointsUsed) {
+                $userPointsInKM = $user->points / 10;
+                if ($userPointsInKM < $pointsUsed) {
                     return response()->json([
-                        'message' => 'Nemate dovoljno na računu. Imate ' . $user->points . ' KM, a pokušavate iskoristiti ' . $pointsUsed . ' KM.',
-                        'available_points' => $user->points,
+                        'message' => 'Nemate dovoljno na računu. Imate ' . number_format($userPointsInKM, 2) . ' KM, a pokušavate iskoristiti ' . number_format($pointsUsed, 2) . ' KM.',
+                        'available_points' => $userPointsInKM,
                         'requested_points' => $pointsUsed
                     ], 400);
                 }
             }
             
-            // Kreiraj WooCommerce narudžbu
+            // Nakon uspješne narudžbe, procesuj points i cashback PRVO
+            if ($user) {
+                $this->processPointsAndCashback($user, $pointsUsed, $orderTotal);
+                // Refresh korisnika da dobijemo ažurirano stanje
+                $user->refresh();
+            }
+            
+            // Kreiraj WooCommerce narudžbu (nakon što su points procesirani)
             $wooOrder = $this->createWooCommerceOrder($orderData);
             
             if (!$wooOrder['success']) {
                 return response()->json(['message' => 'Greška prilikom kreiranja narudžbe u WooCommerce.', 'error' => $wooOrder['error']], 500);
-            }
-
-            // Nakon uspješne narudžbe, procesuj points i cashback
-            if ($user) {
-                $this->processPointsAndCashback($user, $pointsUsed, $orderTotal);
             }
 
             return response()->json([
@@ -60,7 +64,7 @@ class OrderController extends Controller
                 'order_id' => $wooOrder['order_id'],
                 'points_used' => $pointsUsed,
                 'cashback_earned' => $this->calculateCashback($orderTotal),
-                'new_balance' => $user ? $user->fresh()->points : 0
+                'new_balance' => $user ? ($user->fresh()->points / 10) : 0
             ], 200);
             
         } catch (\Exception $e) {
@@ -76,9 +80,11 @@ class OrderController extends Controller
      */
     private function processPointsAndCashback($user, $pointsUsed, $orderTotal)
     {
+        // Points se u bazi čuvaju kao points * 10, tako da trebamo konvertovati
         // Oduzmi iskorištene points i kreiraj transakciju
         if ($pointsUsed > 0) {
-            $user->points -= $pointsUsed;
+            $pointsUsedForDB = $pointsUsed * 10;
+            $user->points -= $pointsUsedForDB;
             
             // Kreiraj transakciju za oduzimanje
             $this->createTransaction(
@@ -94,7 +100,8 @@ class OrderController extends Controller
         $cashbackAmount = ($orderTotal * $cashbackPercentage) / 100;
         
         if ($cashbackAmount > 0) {
-            $user->points += $cashbackAmount;
+            $cashbackForDB = $cashbackAmount * 10;
+            $user->points += $cashbackForDB;
             
             // Kreiraj transakciju za cashback
             $this->createTransaction(
@@ -111,7 +118,7 @@ class OrderController extends Controller
             'user_id' => $user->id,
             'points_used' => $pointsUsed,
             'cashback_earned' => $cashbackAmount,
-            'new_balance' => $user->points
+            'new_balance' => $user->points / 10
         ]);
     }
 
@@ -213,7 +220,6 @@ class OrderController extends Controller
                     'last_name' => $this->extractLastName($customerInfo['name']),
                     'address_1' => $customerInfo['address'],
                     'city' => $customerInfo['city'],
-                    'state' => 'FBiH',
                     'postcode' => '-',
                     'country' => 'BA',
                     'email' => $customerInfo['email'],
@@ -224,7 +230,6 @@ class OrderController extends Controller
                     'last_name' => $this->extractLastName($customerInfo['name']),
                     'address_1' => $customerInfo['address'],
                     'city' => $customerInfo['city'],
-                    'state' => 'FBiH',
                     'postcode' => '-',
                     'country' => 'BA'
                 ],
@@ -360,10 +365,12 @@ class OrderController extends Controller
         $note .= "\n🎉 CASHBACK NAGRADA:\n";
         $note .= "   • Povrat: " . number_format($cashbackAmount, 2) . " KM ({$cashbackPercentage}%)\n";
         
-        // Novo stanje
+        // Novo stanje (korisnik je već ažuriran u processPointsAndCashback)
         if ($user) {
-            $newBalance = $user->points - $pointsUsed + $cashbackAmount;
-            $note .= "   • Novo stanje: " . number_format($newBalance, 2) . " KM\n";
+            // Refresh korisnika da dobijemo najnovije stanje iz baze
+            $user->refresh();
+            // Points se u bazi čuvaju kao points * 10, tako da trebamo dijeliti sa 10
+            $note .= "   • Novo stanje: " . number_format($user->points / 10, 2) . " KM\n";
         }
         
         $note .= "\n═══════════════════════════════════════\n\n";
