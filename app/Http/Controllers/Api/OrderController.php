@@ -81,12 +81,9 @@ class OrderController extends Controller
     private function processPointsAndCashback($user, $pointsUsed, $orderTotal)
     {
         // Points se u bazi čuvaju kao points * 10, tako da trebamo konvertovati
-        // Oduzmi iskorištene points i kreiraj transakciju
+        
+        // PRVO: Unesi transakciju za oduzimanje (ako postoji)
         if ($pointsUsed > 0) {
-            $pointsUsedForDB = $pointsUsed * 10;
-            $user->points -= $pointsUsedForDB;
-            
-            // Kreiraj transakciju za oduzimanje
             $this->createTransaction(
                 $user,
                 $pointsUsed,
@@ -95,21 +92,28 @@ class OrderController extends Controller
             );
         }
         
-        // Dodaj cashback i kreiraj transakciju
+        // DRUGO: Unesi transakciju za dodavanje cashback-a (ako postoji)
         $cashbackPercentage = config('discount.cashback_percentage', 5);
         $cashbackAmount = ($orderTotal * $cashbackPercentage) / 100;
         
         if ($cashbackAmount > 0) {
-            $cashbackForDB = $cashbackAmount * 10;
-            $user->points += $cashbackForDB;
-            
-            // Kreiraj transakciju za cashback
             $this->createTransaction(
                 $user,
                 $cashbackAmount,
                 'dodato',
                 'Online Shop - Cashback ' . $cashbackPercentage . '%'
             );
+        }
+        
+        // TREĆE: Ažuriraj korisnika nakon što su sve transakcije unesene
+        if ($pointsUsed > 0) {
+            $pointsUsedForDB = $pointsUsed * 10;
+            $user->points -= $pointsUsedForDB;
+        }
+        
+        if ($cashbackAmount > 0) {
+            $cashbackForDB = $cashbackAmount * 10;
+            $user->points += $cashbackForDB;
         }
         
         $user->save();
