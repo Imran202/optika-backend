@@ -25,10 +25,10 @@ class ReservationController extends Controller
             $datum = $request->datum;
             $poslovnica = $request->poslovnica;
 
-            // Generate all time slots from 10:00 to 21:00 every 30 minutes
+            // Generate all time slots from 10:00 to 20:00 every 30 minutes
             $timeSlots = [];
             $startTime = Carbon::createFromTime(10, 0, 0);
-            $endTime = Carbon::createFromTime(21, 0, 0);
+            $endTime = Carbon::createFromTime(20, 0, 0);
 
             while ($startTime <= $endTime) {
                 $timeSlots[] = $startTime->format('H:i:s');
