@@ -86,9 +86,10 @@ class GlassesController extends Controller
             ];
             
             $userGlasses = [];
+            $headers = $values[0];
             for ($i = 1; $i < min(10, count($values)); $i++) {
                 $row = $values[$i];
-                $rowData = array_combine($values[0], array_pad($row, count($values[0]), ''));
+                $rowData = array_combine($headers, array_pad($row, count($headers), ''));
                 
                 $userPhone = $testUser->phone;
                 $userName = $testUser->name;
@@ -99,7 +100,7 @@ class GlassesController extends Controller
                 $sheetFullName = trim($sheetFirstName . ' ' . $sheetLastName);
                 
                 if ($this->matchesUser($userPhone, $userName, $sheetPhone, $sheetFullName)) {
-                    $glasses = $this->formatGlassesData($rowData, $i);
+                    $glasses = $this->formatGlassesData($rowData, $headers, $row, $i);
                     if ($glasses) {
                         $userGlasses[] = $glasses;
                     }
@@ -226,7 +227,7 @@ class GlassesController extends Controller
             
             // Match by phone number or name
             if ($this->matchesUser($userPhone, $userName, $sheetPhone, $sheetFullName)) {
-                $glasses = $this->formatGlassesData($rowData, $i);
+                $glasses = $this->formatGlassesData($rowData, $headers, $row, $i);
                 if ($glasses) {
                     $userGlasses[] = $glasses;
                 }
@@ -402,18 +403,97 @@ class GlassesController extends Controller
     /**
      * Format raw sheet data into glasses object
      */
-    private function formatGlassesData($rowData, $rowIndex): ?array
+    private function formatGlassesData($rowData, $headers, $row, $rowIndex): ?array
     {
         try {
+            // Get column indices to handle duplicate column names
+            $headerIndices = [];
+            foreach ($headers as $index => $header) {
+                $headerIndices[$header][] = $index;
+            }
+            
+            // Helper function to get value by column index
+            $getByIndex = function($index) use ($row, $headers) {
+                return isset($row[$index]) ? $row[$index] : '';
+            };
+            
             // Extract prescription data based on your sheet structure
-            $rightSphere = $rowData['D SPH'] ?? '';
-            $rightCylinder = $rowData['CYL'] ?? '';
-            $rightAxis = $rowData['AXA'] ?? '';
-            $leftSphere = $rowData['L SPH'] ?? '';
-            $leftCylinder = $rowData['CYL'] ?? ''; // Same CYL column for both eyes
-            $leftAxis = $rowData['AXA'] ?? ''; // Same AXA column for both eyes
-            $addition = $rowData['ADD'] ?? '';
-            $pd = $rowData['PD'] ?? '';
+            // Desno oko (OD): D SPH (E=4), CYL (F=5), AXA (G=6)
+            $rightSphere = $this->cleanValue($rowData['D SPH'] ?? '');
+            // Get first CYL column (index F = 5)
+            $rightCylinder = '';
+            if (isset($headerIndices['CYL']) && isset($headerIndices['CYL'][0])) {
+                $cylIndex = $headerIndices['CYL'][0];
+                $rightCylinder = $this->cleanValue($getByIndex($cylIndex));
+            } elseif (isset($row[5])) {
+                // Fallback: use column F (index 5) directly
+                $rightCylinder = $this->cleanValue($row[5]);
+            } else {
+                $rightCylinder = $this->cleanValue($rowData['CYL'] ?? '');
+            }
+            // Get first AXA column (index G = 6)
+            $rightAxis = '';
+            if (isset($headerIndices['AXA']) && isset($headerIndices['AXA'][0])) {
+                $axaIndex = $headerIndices['AXA'][0];
+                $rightAxis = $this->cleanValue($getByIndex($axaIndex));
+            } elseif (isset($row[6])) {
+                // Fallback: use column G (index 6) directly
+                $rightAxis = $this->cleanValue($row[6]);
+            } else {
+                $rightAxis = $this->cleanValue($rowData['AXA'] ?? '');
+            }
+            
+            // Lijevo oko (OS): L SPH (L=11), CYL (M=12), AXA (N=13)
+            $leftSphere = $this->cleanValue($rowData['L SPH'] ?? '');
+            // Get second CYL column (index M = 12)
+            $leftCylinder = '';
+            if (isset($headerIndices['CYL']) && isset($headerIndices['CYL'][1])) {
+                $cylIndex = $headerIndices['CYL'][1];
+                $leftCylinder = $this->cleanValue($getByIndex($cylIndex));
+            } elseif (isset($row[12])) {
+                // Fallback: use column M (index 12) directly
+                $leftCylinder = $this->cleanValue($row[12]);
+            } else {
+                // Fallback: use same CYL if only one exists
+                $leftCylinder = $this->cleanValue($rowData['CYL'] ?? '');
+            }
+            // Get second AXA column (index N = 13)
+            $leftAxis = '';
+            if (isset($headerIndices['AXA']) && isset($headerIndices['AXA'][1])) {
+                $axaIndex = $headerIndices['AXA'][1];
+                $leftAxis = $this->cleanValue($getByIndex($axaIndex));
+            } elseif (isset($row[13])) {
+                // Fallback: use column N (index 13) directly
+                $leftAxis = $this->cleanValue($row[13]);
+            } else {
+                // Fallback: use same AXA if only one exists
+                $leftAxis = $this->cleanValue($rowData['AXA'] ?? '');
+            }
+            
+            // Dodatni parametri: L PD (H=7), D PD (I=8), PD (J=9), ADD (K=10)
+            $lPd = $this->cleanValue($rowData['L PD'] ?? '');
+            $dPd = $this->cleanValue($rowData['D PD'] ?? '');
+            $pd = $this->cleanValue($rowData['PD'] ?? '');
+            $addition = $this->cleanValue($rowData['ADD'] ?? '');
+            
+            // Opcioni parametri: PANT (O=14), VERTEX/VER (P=15)
+            $pant = '';
+            if (isset($rowData['PANT'])) {
+                $pant = $this->cleanValue($rowData['PANT']);
+            } elseif (isset($row[14])) {
+                // Fallback: use column O (index 14) directly
+                $pant = $this->cleanValue($row[14]);
+            }
+            
+            $ver = '';
+            if (isset($rowData['VERTEX'])) {
+                $ver = $this->cleanValue($rowData['VERTEX']);
+            } elseif (isset($rowData['VER'])) {
+                $ver = $this->cleanValue($rowData['VER']);
+            } elseif (isset($row[15])) {
+                // Fallback: use column P (index 15) directly
+                $ver = $this->cleanValue($row[15]);
+            }
             
             // Get frame description and other details
             $frameDescription = $rowData['OKVIR OPIS'] ?? '';
@@ -422,7 +502,27 @@ class GlassesController extends Controller
             $doctor = $rowData['DOKTOR'] ?? '';
             $store = $rowData['RADNJA'] ?? '';
             
-            // Build prescription string
+            // Build structured prescription data
+            $prescriptionData = [
+                'od' => [
+                    'sph' => $rightSphere ?: null,
+                    'cyl' => $rightCylinder ?: null,
+                    'axa' => $rightAxis ?: null,
+                ],
+                'os' => [
+                    'sph' => $leftSphere ?: null,
+                    'cyl' => $leftCylinder ?: null,
+                    'axa' => $leftAxis ?: null,
+                ],
+                'pd' => $pd ?: null,
+                'lPd' => $lPd ?: null,
+                'dPd' => $dPd ?: null,
+                'add' => $addition ?: null,
+                'pant' => $pant ?: null,
+                'ver' => $ver ?: null,
+            ];
+            
+            // Build prescription string for backward compatibility
             $prescription = $this->buildPrescriptionString(
                 $rightSphere, $rightCylinder, $rightAxis,
                 $leftSphere, $leftCylinder, $leftAxis,
@@ -458,7 +558,8 @@ class GlassesController extends Controller
                 'warrantyEnd' => $warrantyEnd,
                 'frameBrand' => $frameBrand,
                 'lensType' => $this->determineLensType($addition),
-                'prescription' => $prescription,
+                'prescription' => $prescription, // Backward compatibility
+                'prescriptionData' => $prescriptionData, // Structured data
                 'status' => $status,
                 'doctor' => $doctor,
                 'store' => $store,
@@ -472,6 +573,24 @@ class GlassesController extends Controller
             \Log::error('Error formatting glasses data: ' . $e->getMessage());
             return null;
         }
+    }
+    
+    /**
+     * Clean and normalize value (remove spaces, normalize decimal separator)
+     */
+    private function cleanValue($value): string
+    {
+        if (empty($value)) {
+            return '';
+        }
+        
+        // Convert to string and trim
+        $value = trim((string)$value);
+        
+        // Replace comma with dot for decimal separator
+        $value = str_replace(',', '.', $value);
+        
+        return $value;
     }
 
     /**
